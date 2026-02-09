@@ -1,0 +1,46 @@
+{
+  "cniVersion": "1.0.0",
+  "name": "bridge",
+  "nerdctlID": "bridge",
+  "nerdctlLabels": {
+    "nerdctl/default-network": "true"
+  },
+  "plugins": [
+    {
+      "type": "bridge",
+      "bridge": "cni0",
+      "isGateway": true,
+      "ipMasq": true,
+      "hairpinMode": true,
+      "ipam": {
+        "type": "host-local",
+        "ranges": [
+          [
+            {
+              "subnet": "172.17.0.0/23",
+              "gateway": "172.17.0.1"
+            }
+          ]
+        ],
+        "routes": [
+          {
+            "dst": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    {
+      "type": "portmap",
+      "capabilities": {
+        "portMappings": true
+      }
+    },
+    {
+      "type": "firewall",
+      "ingressPolicy": "same-bridge"
+    },
+    {
+      "type": "tuning"
+    }
+  ]
+}

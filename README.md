@@ -7,7 +7,7 @@ CaptainOS boots via PXE/iPXE, runs entirely from RAM as a compressed CPIO initra
 ## Output sizes (amd64)
 
 | Artifact | Size |
-|---|---|
+| --- | --- |
 | `initramfs-amd64.cpio.zst` | ~88 MB |
 | `vmlinuz-amd64` | ~9.5 MB |
 
@@ -44,6 +44,7 @@ NO_CACHE=1 ./build.sh
 ```
 
 Output artifacts are placed in `out/`:
+
 - `out/initramfs-<arch>.cpio.zst` — the initramfs
 - `out/vmlinuz-<arch>` — the kernel
 
@@ -67,7 +68,7 @@ The build has three stages, all running inside a Docker container:
 ### Included tools
 
 | Component | Version | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | containerd | 2.2.1 | Container runtime |
 | nerdctl | 2.2.1 | Container CLI (Docker-compatible) |
 | runc | 1.4.0 | OCI runtime |
@@ -86,7 +87,7 @@ The build has three stages, all running inside a Docker container:
 CaptainOS reads provisioning configuration from the kernel command line:
 
 | Parameter | Description |
-|---|---|
+| - | - |
 | `tink_worker_image` | Container image for the tink-agent (e.g. `registry.example.com/tink-agent:latest`) |
 | `docker_registry` | Registry to pull from |
 | `registry_username` | Registry auth username |
@@ -98,7 +99,7 @@ CaptainOS reads provisioning configuration from the kernel command line:
 
 ## Project layout
 
-```
+```bash
 .
 ├── build.sh                    # Main build orchestrator
 ├── Dockerfile                  # Builder container definition
