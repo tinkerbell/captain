@@ -103,7 +103,7 @@ pull_image() {
 
     while true; do
         attempt=$((attempt + 1))
-        if nerdctl pull "${TINK_IMAGE}" 2>&1; then
+        if nerdctl pull -q "${TINK_IMAGE}" 2>&1; then
             echo "Image pulled successfully."
             return 0
         fi
