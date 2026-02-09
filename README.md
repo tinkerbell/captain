@@ -92,7 +92,6 @@ CaptainOS reads provisioning configuration from the kernel command line:
 | `registry_username` | Registry auth username |
 | `registry_password` | Registry auth password |
 | `tinkerbell_tls` | Set to `false` to disable TLS for tink-agent |
-| `packet_base_url` | Tinkerbell server base URL |
 | `syslog_host` | Remote syslog host (IP or hostname) |
 | `syslog_port` | Remote syslog port (default: 514) |
 | `insecure_registries` | Comma-separated list of registries to configure as HTTP |
@@ -126,9 +125,15 @@ CaptainOS reads provisioning configuration from the kernel command line:
 
 ```bash
 ./build.sh qemu-test
+
+# With extra kernel cmdline parameters
+QEMU_APPEND='tink_worker_image=reg.local/tink-agent:latest docker_registry=reg.local' ./build.sh qemu-test
+
+# With more resources
+QEMU_MEM=4G QEMU_SMP=4 ./build.sh qemu-test
 ```
 
-This boots the image in QEMU with a virtio NIC and serial console. Press `Ctrl-A X` to exit.
+This boots the image in QEMU with a virtio NIC and serial console. `console=ttyS0 audit=0` is always appended. Press `Ctrl-A X` to exit.
 
 ## License
 

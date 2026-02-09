@@ -174,13 +174,16 @@ do_qemu_test() {
         qemu_cmd="qemu-system-aarch64"
     fi
 
+    local append="console=ttyS0 audit=0 ${QEMU_APPEND:-}"
+
+    log "Kernel cmdline: $append"
     $qemu_cmd \
         -kernel "$kernel" \
         -initrd "$initrd" \
-        -append "console=ttyS0 audit=0" \
+        -append "$append" \
         -nographic \
-        -m 2G \
-        -smp 2 \
+        -m "${QEMU_MEM:-2G}" \
+        -smp "${QEMU_SMP:-2}" \
         -nic user,model=virtio-net-pci \
         -no-reboot
 }
@@ -205,6 +208,9 @@ Environment:
   FORCE_KERNEL    Set to 1 to force kernel rebuild
   NO_CACHE        Set to 1 to rebuild builder image without cache
   BUILDER_IMAGE   Override builder Docker image name
+  QEMU_APPEND    Extra kernel cmdline args for qemu-test
+  QEMU_MEM       QEMU RAM size (default: 2G)
+  QEMU_SMP       QEMU CPU count (default: 2)
 
 Examples:
   ./build.sh                     # Build with defaults
@@ -212,6 +218,7 @@ Examples:
   KERNEL_SRC=~/linux ./build.sh  # Use local kernel source
   ./build.sh shell               # Debug inside builder
   ./build.sh qemu-test           # Boot test with QEMU
+  QEMU_APPEND='tink_worker_image=reg.local/tink-agent:latest' ./build.sh qemu-test
 EOF
 }
 
