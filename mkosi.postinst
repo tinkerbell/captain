@@ -8,7 +8,7 @@ set -euo pipefail
 echo "==> CaptainOS post-install: configuring services..."
 
 # Enable core services
-for unit in systemd-networkd systemd-resolved containerd captainos-banner \
+for unit in systemd-networkd systemd-resolved systemd-timesyncd containerd captainos-banner \
             tink-agent-setup tink-agent journal-bridge remote-syslog; do
     systemctl enable "$unit" 2>/dev/null || true
 done
@@ -25,7 +25,6 @@ for unit in \
     logrotate.timer \
     man-db.timer \
     remote-fs.target \
-    systemd-timesyncd.service \
     systemd-firstboot.service; do
     systemctl disable "$unit" 2>/dev/null || true
     systemctl mask "$unit" 2>/dev/null || true
