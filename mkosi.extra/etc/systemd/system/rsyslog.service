@@ -1,0 +1,19 @@
+[Unit]
+Description=Remote Syslog Forwarder (rsyslog)
+Documentation=https://www.rsyslog.com/doc/
+After=network-online.target systemd-journald.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/mkdir -p /run/rsyslog
+ExecStart=/usr/local/bin/rsyslog-start
+Restart=on-failure
+RestartSec=10
+
+# Security hardening
+NoNewPrivileges=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

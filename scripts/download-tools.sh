@@ -71,20 +71,6 @@ else
     echo "==> nerdctl already present (set FORCE_TOOLS=1 to re-download)"
 fi
 
-# --- Install remote_syslog2 ---
-REMOTE_SYSLOG_VERSION="v0.21"
-if [[ ! -x "$TOOLS_DIR/remote_syslog" ]] || [[ "${FORCE_TOOLS:-}" == "1" ]]; then
-    echo "==> Installing remote_syslog2 ${REMOTE_SYSLOG_VERSION} (${DL_ARCH})..."
-    curl -fsSL "https://github.com/papertrail/remote_syslog2/releases/download/${REMOTE_SYSLOG_VERSION}/remote_syslog_linux_${DL_ARCH}.tar.gz" \
-        | tar -xzf - -C /tmp remote_syslog/remote_syslog
-    mv /tmp/remote_syslog/remote_syslog "$TOOLS_DIR/remote_syslog"
-    rm -rf /tmp/remote_syslog
-    chmod +x "$TOOLS_DIR/remote_syslog"
-    echo "    remote_syslog: $TOOLS_DIR/remote_syslog"
-else
-    echo "==> remote_syslog already present (set FORCE_TOOLS=1 to re-download)"
-fi
-
 # --- Install CNI plugins (required for container networking) ---
 CNI_VERSION="1.6.0"
 CNI_DIR="${WORK_DIR}/mkosi.output/kernel/opt/cni/bin"

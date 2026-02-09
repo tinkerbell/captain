@@ -1,8 +1,8 @@
 [Unit]
 Description=Tinkerbell Agent
-After=tink-agent-setup.service containerd.service network-online.target journal-bridge.service
+After=tink-agent-setup.service containerd.service network-online.target rsyslog.service
 Requires=tink-agent-setup.service containerd.service
-Wants=network-online.target journal-bridge.service
+Wants=network-online.target rsyslog.service
 # Only start when Tinkerbell parameters are on the kernel command line
 ConditionKernelCommandLine=|tink_worker_image
 ConditionKernelCommandLine=|docker_registry
@@ -18,7 +18,7 @@ RestartSec=5
 RestartMaxDelaySec=60
 RestartSteps=5
 
-# Logging to journal (forwarded to syslog by tink-agent-syslog-fwd)
+# Logging to journal (forwarded to remote syslog by rsyslog)
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=tink-agent

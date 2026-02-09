@@ -9,7 +9,7 @@ echo "==> CaptainOS post-install: configuring services..."
 
 # Enable core services
 for unit in systemd-networkd systemd-resolved systemd-timesyncd containerd captainos-banner \
-            tink-agent-setup tink-agent journal-bridge remote-syslog; do
+            tink-agent-setup tink-agent rsyslog; do
     systemctl enable "$unit" 2>/dev/null || true
 done
 

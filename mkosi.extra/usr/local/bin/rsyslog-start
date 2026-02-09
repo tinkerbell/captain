@@ -1,0 +1,42 @@
+#!/bin/bash
+# rsyslog-start — Parse kernel cmdline for syslog config, then start rsyslogd.
+#
+# Reads syslog_host and syslog_port from /proc/cmdline and exports them
+# as environment variables for rsyslog's backtick config directives.
+#
+# Kernel cmdline parameters:
+#   syslog_host=<hostname>  - Syslog server hostname/IP (required)
+#   syslog_port=<port>      - Syslog server port (default: 514)
+
+set -euo pipefail
+
+# Parse kernel cmdline
+CMDLINE=$(cat /proc/cmdline)
+SYSLOG_HOST=""
+SYSLOG_PORT="514"
+
+for param in $CMDLINE; do
+    case "$param" in
+        syslog_host=*) SYSLOG_HOST="${param#syslog_host=}" ;;
+        syslog_port=*) SYSLOG_PORT="${param#syslog_port=}" ;;
+    esac
+done
+
+# Exit cleanly if no syslog server configured
+if [[ -z "$SYSLOG_HOST" ]]; then
+    echo "rsyslog: No syslog_host= in cmdline, remote syslog forwarding disabled"
+    # Sleep forever so systemd doesn't restart us
+    exec sleep infinity
+fi
+
+echo "rsyslog: Forwarding logs to ${SYSLOG_HOST}:${SYSLOG_PORT} (udp)"
+
+# Export for rsyslog backtick directives in config files
+export SYSLOG_HOST
+export SYSLOG_PORT
+
+# Create work directory for rsyslog
+mkdir -p /run/rsyslog
+
+# Start rsyslogd in foreground
+exec /usr/sbin/rsyslogd -n -i /run/rsyslog/rsyslogd.pid

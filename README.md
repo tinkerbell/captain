@@ -73,7 +73,6 @@ The build has three stages, all running inside a Docker container:
 | nerdctl | 2.2.1 | Container CLI (Docker-compatible) |
 | runc | 1.4.0 | OCI runtime |
 | CNI plugins | 1.6.0 | Container networking (bridge, host-local, loopback, portmap, firewall, tuning) |
-| remote_syslog2 | 0.21 | Forward journal logs to a remote syslog server |
 
 ### Key design decisions
 
