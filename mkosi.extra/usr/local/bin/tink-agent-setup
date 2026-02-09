@@ -16,6 +16,25 @@ set -euo pipefail
 TINK_AGENT_BIN="/tink-agent"
 EXTRACT_DIR="/var/lib/tink-agent"
 
+# --- JSON logging helper ---
+# Usage: log_info "message" ["key" "value" ...]
+#        log_error "message" ["key" "value" ...]
+_json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g'; }
+_log() {
+    local level="$1" msg="$2"
+    shift 2
+    local ts
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local extra=""
+    while [[ $# -ge 2 ]]; do
+        extra="${extra},\"$(_json_escape "$1")\":\"$(_json_escape "$2")\""
+        shift 2
+    done
+    printf '{"time":"%s","level":"%s","msg":"%s"%s}\n' "$ts" "$level" "$(_json_escape "$msg")" "$extra"
+}
+log_info()  { _log "info"  "$@"; }
+log_error() { _log "error" "$@"; }
+
 # --- Parse /proc/cmdline ---
 parse_cmdline() {
     local cmdline
@@ -57,7 +76,7 @@ configure_insecure_registries() {
         return
     fi
 
-    echo "Configuring insecure registries: ${INSECURE_REGISTRIES}"
+    log_info "configuring insecure registries" "registries" "${INSECURE_REGISTRIES}"
     local certs_dir="/etc/containerd/certs.d"
 
     IFS=',' read -ra REGISTRIES <<< "$INSECURE_REGISTRIES"
@@ -72,7 +91,7 @@ server = "http://${registry}"
   capabilities = ["pull", "resolve", "push"]
   skip_verify = true
 EOF
-        echo "  Configured: ${registry}"
+        log_info "configured insecure registry" "registry" "${registry}"
     done
 }
 
@@ -81,21 +100,21 @@ wait_for_containerd() {
     local max_attempts=30
     local attempt=0
     local sock="/run/containerd/containerd.sock"
-    echo "Waiting for containerd socket at ${sock}..."
+    log_info "waiting for containerd socket" "path" "${sock}"
     while [[ ! -S "$sock" ]]; do
         attempt=$((attempt + 1))
         if [[ $attempt -ge $max_attempts ]]; then
-            echo "ERROR: containerd socket did not appear after ${max_attempts}s"
+            log_error "containerd socket did not appear" "timeout" "${max_attempts}s"
             exit 1
         fi
         sleep 1
     done
-    echo "containerd is ready."
+    log_info "containerd is ready"
 }
 
 # --- Pull the tink-agent image ---
 pull_image() {
-    echo "Pulling tink-agent image: ${TINK_IMAGE}"
+    log_info "pulling tink-agent image" "image" "${TINK_IMAGE}"
 
     local max_attempts=5
     local attempt=0
@@ -104,16 +123,16 @@ pull_image() {
     while true; do
         attempt=$((attempt + 1))
         if nerdctl pull -q "${TINK_IMAGE}" 2>&1; then
-            echo "Image pulled successfully."
+            log_info "image pulled successfully"
             return 0
         fi
 
         if [[ $attempt -ge $max_attempts ]]; then
-            echo "ERROR: Failed to pull image after ${max_attempts} attempts"
+            log_error "failed to pull image" "attempts" "${max_attempts}"
             exit 1
         fi
 
-        echo "Pull attempt ${attempt} failed, retrying in ${wait_time}s..."
+        log_info "pull attempt failed, retrying" "attempt" "${attempt}" "retryIn" "${wait_time}s"
         sleep "$wait_time"
         wait_time=$((wait_time * 2))
     done
@@ -121,14 +140,14 @@ pull_image() {
 
 # --- Extract the tink-agent binary from the image ---
 extract_binary() {
-    echo "Extracting tink-agent binary from image..."
+    log_info "extracting tink-agent binary from image"
     mkdir -p "$EXTRACT_DIR"
 
     local tmpdir
     tmpdir=$(mktemp -d)
 
     # Save the image as a tar archive
-    echo "Saving image to tar..."
+    log_info "saving image to tar"
     nerdctl save "${TINK_IMAGE}" > "${tmpdir}/image.tar"
     tar -xf "${tmpdir}/image.tar" -C "${tmpdir}"
 
@@ -139,7 +158,7 @@ extract_binary() {
     while IFS= read -r layer; do
         for bin_path in $bin_paths; do
             if tar -xf "$layer" -C "$EXTRACT_DIR" "$bin_path" 2>/dev/null; then
-                echo "Extracted ${bin_path} from layer $(basename "$layer")"
+                log_info "extracted binary from layer" "path" "${bin_path}" "layer" "$(basename "$layer")"
                 found=1
                 break 2
             fi
@@ -152,7 +171,7 @@ extract_binary() {
             for bin_path in $bin_paths; do
                 if tar -xzf "$blob" -C "$EXTRACT_DIR" "$bin_path" 2>/dev/null || \
                    tar -xf "$blob" -C "$EXTRACT_DIR" "$bin_path" 2>/dev/null; then
-                    echo "Extracted ${bin_path} from blob $(basename "$blob")"
+                    log_info "extracted binary from blob" "path" "${bin_path}" "blob" "$(basename "$blob")"
                     found=1
                     break 2
                 fi
@@ -167,16 +186,16 @@ extract_binary() {
         if [[ -n "$extracted" ]]; then
             cp "$extracted" "${TINK_AGENT_BIN}"
             chmod +x "${TINK_AGENT_BIN}"
-            echo "Installed tink-agent to ${TINK_AGENT_BIN}"
+            log_info "installed tink-agent" "path" "${TINK_AGENT_BIN}"
         fi
     fi
 
     rm -rf "${tmpdir}"
 
     if [[ "$found" -eq 0 ]] || [[ ! -x "${TINK_AGENT_BIN}" ]]; then
-        echo "ERROR: Could not find tink-agent binary in the container image"
-        echo "Image layers contained:"
-        nerdctl save "${TINK_IMAGE}" | tar -tf - 2>/dev/null | head -30 || true
+        local layers
+        layers=$(nerdctl save "${TINK_IMAGE}" | tar -tf - 2>/dev/null | head -30 || true)
+        log_error "could not find tink-agent binary in container image" "layers" "${layers}"
         exit 1
     fi
 }
@@ -184,7 +203,7 @@ extract_binary() {
 # --- Write environment file for the systemd unit ---
 write_env_file() {
     local env_file="/etc/tink-agent.env"
-    echo "Writing tink-agent environment to ${env_file}"
+    log_info "writing tink-agent environment" "path" "${env_file}"
 
     cat > "$env_file" <<EOF
 # Auto-generated by tink-agent-setup from /proc/cmdline
@@ -205,13 +224,10 @@ EOF
 }
 
 # --- Main ---
-echo "=== tink-agent-setup: starting ==="
+log_info "tink-agent-setup starting"
 parse_cmdline
 
-echo "  Image:          ${TINK_IMAGE}"
-echo "  GRPC Authority: ${GRPC_AUTHORITY:-not set}"
-echo "  Worker ID:      ${WORKER_ID:-not set}"
-echo "  Syslog Host:    ${SYSLOG_HOST:-not set}"
+log_info "configuration" "image" "${TINK_IMAGE}" "grpcAuthority" "${GRPC_AUTHORITY:-}" "workerID" "${WORKER_ID:-}" "syslogHost" "${SYSLOG_HOST:-}"
 
 wait_for_containerd
 configure_insecure_registries
@@ -219,4 +235,4 @@ pull_image
 extract_binary
 write_env_file
 
-echo "=== tink-agent-setup: complete ==="
+log_info "tink-agent-setup complete"
