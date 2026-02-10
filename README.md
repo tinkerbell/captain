@@ -2,7 +2,7 @@
 
 A minimal, systemd-based in-memory OS for [Tinkerbell](https://tinkerbell.org) bare-metal provisioning.
 
-CaptainOS boots via PXE/iPXE, runs entirely from RAM as a compressed CPIO initramfs, and provides a container runtime environment for the [tink-agent](https://github.com/tinkerbell/tink) — the component that drives hardware provisioning workflows.
+CaptainOS boots via PXE/iPXE, runs entirely from RAM as a compressed CPIO initramfs, and provides a container runtime environment for the [tink-agent](https://github.com/tinkerbell/tinkerbell) — the component that drives hardware provisioning workflows.
 
 ## Output sizes (amd64)
 
