@@ -69,6 +69,14 @@ else
     make ARCH="$KARCH" ${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE} defconfig
 fi
 
+# --- Increase kernel command line max size (default 2048 on x86) ---
+# Tinkerbell workflows pass many parameters via cmdline; 4096 gives headroom.
+if [[ "$KARCH" == "x86_64" ]]; then
+    echo "==> Increasing COMMAND_LINE_SIZE to 4096 (x86_64)..."
+    sed -i 's/#define COMMAND_LINE_SIZE[[:space:]]*2048/#define COMMAND_LINE_SIZE 4096/' \
+        arch/x86/include/asm/setup.h
+fi
+
 # --- Build kernel ---
 NPROC=$(nproc)
 echo "==> Building kernel with ${NPROC} jobs..."

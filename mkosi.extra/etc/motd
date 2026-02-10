@@ -1,13 +1,13 @@
 
 Welcome to CaptainOS! Your Tinkerbell operating system installation environment.
                                                              
- ▄▄▄▄▄▄▄                                    ▄▄▄▄▄    ▄▄▄▄▄▄▄ 
-███▀▀▀▀▀              ██        ▀▀        ▄███████▄ █████▀▀▀ 
-███       ▀▀█▄ ████▄ ▀██▀▀ ▀▀█▄ ██  ████▄ ███   ███  ▀████▄  
-███      ▄█▀██ ██ ██  ██  ▄█▀██ ██  ██ ██ ███▄▄▄███    ▀████ 
-▀███████ ▀█▄██ ████▀  ██  ▀█▄██ ██▄ ██ ██  ▀█████▀  ███████▀ 
-               ██                                            
-               ▀▀                                            
+   ▄▄▄▄▄▄▄                                    ▄▄▄▄▄    ▄▄▄▄▄▄▄ 
+  ███▀▀▀▀▀              ██        ▀▀        ▄███████▄ █████▀▀▀ 
+  ███       ▀▀█▄ ████▄ ▀██▀▀ ▀▀█▄ ██  ████▄ ███   ███  ▀████▄  
+  ███      ▄█▀██ ██ ██  ██  ▄█▀██ ██  ██ ██ ███▄▄▄███    ▀████ 
+  ▀███████ ▀█▄██ ████▀  ██  ▀█▄██ ██▄ ██ ██  ▀█████▀  ███████▀ 
+                 ██                                            
+                 ▀▀                                            
 
 - Use `journalctl -u tink-agent` command to access the tink worker/agent logs.
 - Use `nerdctl` commands to access workflow action containers.
