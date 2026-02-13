@@ -4,6 +4,25 @@
 
 set -euo pipefail
 
+# --- JSON logging helper ---
+# Usage: log_info "message" ["key" "value" ...]
+#        log_error "message" ["key" "value" ...]
+_json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g'; }
+_log() {
+    local level="$1" msg="$2"
+    shift 2
+    local ts
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local extra=""
+    while [[ $# -ge 2 ]]; do
+        extra="${extra},\"$(_json_escape "$1")\":\"$(_json_escape "$2")\""
+        shift 2
+    done
+    printf '{"time":"%s","level":"%s","msg":"%s"%s}\n' "$ts" "$level" "$(_json_escape "$msg")" "$extra"
+}
+log_info()  { _log "info"  "$@"; }
+log_error() { _log "error" "$@"; }
+
 ARGS=(
     -runtime containerd
     -containerd-socket /run/containerd/containerd.sock
@@ -18,5 +37,5 @@ ARGS=(
 [[ -n "${REGISTRY_USERNAME:-}" ]]         && ARGS+=(-registry-user "$REGISTRY_USERNAME")
 [[ -n "${REGISTRY_PASSWORD:-}" ]]         && ARGS+=(-registry-pass "$REGISTRY_PASSWORD")
 
-echo "Starting tink-agent with: ${ARGS[*]}"
+log_info "starting tink-agent" "args" "${ARGS[*]}"
 exec /tink-agent "${ARGS[@]}"
