@@ -2,3 +2,4 @@
 # Ensures nerdctl uses the OS-provided CNI config instead of auto-creating one.
 cni_path = "/opt/cni/bin"
 cni_netconfpath = "/etc/cni/net.d"
+namespace = "tinkerbell"

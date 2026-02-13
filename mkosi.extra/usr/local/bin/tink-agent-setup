@@ -120,6 +120,12 @@ pull_image() {
     local attempt=0
     local wait_time=2
 
+    # Check if the image is already present before attempting to pull
+    if nerdctl images -q "${TINK_IMAGE}" 2>/dev/null | grep -q .; then
+        log_info "image already present locally, skipping pull"
+        return
+    fi
+
     while true; do
         attempt=$((attempt + 1))
         if nerdctl pull -q "${TINK_IMAGE}" 2>&1; then
