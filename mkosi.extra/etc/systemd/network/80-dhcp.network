@@ -4,8 +4,6 @@ Name=eth*
 
 [Network]
 DHCP=yes
-# Use short timeouts for PXE environments
-DHCPSendRelease=yes
 
 [DHCPv4]
 UseDNS=yes
