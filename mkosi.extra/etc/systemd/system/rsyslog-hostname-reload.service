@@ -1,0 +1,6 @@
+[Unit]
+Description=Restart rsyslog to pick up new hostname
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart rsyslog.service

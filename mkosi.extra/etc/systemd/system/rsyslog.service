@@ -1,13 +1,14 @@
 [Unit]
 Description=Remote Syslog Forwarder (rsyslog)
 Documentation=https://www.rsyslog.com/doc/
-After=network-online.target systemd-journald.service
+After=network-online.target systemd-journald.service systemd-hostnamed.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 ExecStartPre=/bin/mkdir -p /run/rsyslog
 ExecStart=/usr/local/bin/rsyslog-start
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=10
 

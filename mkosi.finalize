@@ -22,6 +22,14 @@ rm -f "$BUILDROOT/usr/lib/systemd/system/sysinit.target.wants/systemd-firstboot.
 rm -f "$BUILDROOT/usr/bin/systemd-firstboot"
 echo "    systemd-firstboot removed"
 
+# Point /etc/resolv.conf at the non-stub resolv.conf written by
+# systemd-resolved.  This file contains upstream (DHCP-provided)
+# nameservers instead of 127.0.0.53.  tink-agent bind-mounts the host's
+# /etc/resolv.conf into action containers so they need real, routable
+# nameservers (the stub address is unreachable from container namespaces).
+ln -sf /run/systemd/resolve/resolv.conf "$BUILDROOT/etc/resolv.conf"
+echo "    /etc/resolv.conf -> /run/systemd/resolve/resolv.conf"
+
 # Ensure /init (switch_root script) is executable
 if [[ -f "$BUILDROOT/init" ]]; then
     chmod +x "$BUILDROOT/init"

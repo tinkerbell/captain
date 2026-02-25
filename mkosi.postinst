@@ -7,9 +7,13 @@ set -euo pipefail
 
 echo "==> CaptainOS post-install: configuring services..."
 
+# Ensure CA certificate bundle is generated (dpkg triggers may not
+# fire reliably in mkosi's chroot).
+update-ca-certificates --fresh 2>/dev/null || true
+
 # Enable core services
 for unit in systemd-networkd systemd-resolved systemd-timesyncd containerd captainos-banner \
-            tink-agent-setup tink-agent rsyslog; do
+            tink-agent-setup tink-agent rsyslog rsyslog-hostname-reload.path; do
     systemctl enable "$unit" 2>/dev/null || true
 done
 

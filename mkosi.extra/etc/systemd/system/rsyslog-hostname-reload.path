@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for hostname changes and reload rsyslog
+
+[Path]
+PathChanged=/etc/hostname
+PathChanged=/run/systemd/netif/leases
+
+[Install]
+WantedBy=multi-user.target
