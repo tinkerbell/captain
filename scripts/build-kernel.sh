@@ -79,10 +79,16 @@ fi
 
 # --- Build kernel ---
 NPROC=$(nproc)
+# Select the correct kernel image target for the architecture
+case "$KARCH" in
+    x86_64) IMAGE_TARGET="bzImage" ;;
+    arm64)  IMAGE_TARGET="Image" ;;
+esac
+
 echo "==> Building kernel with ${NPROC} jobs..."
 make ARCH="$KARCH" ${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE} \
     -j"$NPROC" \
-    bzImage modules
+    $IMAGE_TARGET modules
 
 # --- Determine actual kernel version from build ---
 BUILT_KVER=$(make -s ARCH="$KARCH" kernelrelease)
@@ -96,7 +102,7 @@ make ARCH="$KARCH" ${CROSS_COMPILE:+CROSS_COMPILE=$CROSS_COMPILE} \
 
 # Strip debug symbols from modules to reduce size
 echo "==> Stripping debug symbols from modules..."
-find "$KERNEL_OUTPUT" -name '*.ko' -exec strip --strip-unneeded {} \;
+find "$KERNEL_OUTPUT" -name '*.ko' -exec ${CROSS_COMPILE}strip --strip-unneeded {} \;
 
 # Clean up the build/source symlinks in the modules directory
 rm -f "$KERNEL_OUTPUT/lib/modules/$BUILT_KVER/build"

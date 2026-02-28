@@ -35,6 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Kernel build deps
     build-essential \
     gcc \
+    gcc-aarch64-linux-gnu \
     make \
     flex \
     bison \
@@ -45,6 +46,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pahole \
     rsync \
     coreutils \
+    # Cross-architecture support (arm64 on x86_64 and vice versa)
+    qemu-user-static \
     # Network tools (for fetching kernel source etc.)
     git \
     curl \
