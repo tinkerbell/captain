@@ -93,9 +93,40 @@ run_in_builder() {
     docker run "${docker_args[@]}" "$@"
 }
 
+# Ensure binfmt_misc handlers are registered for cross-architecture builds.
+# The container runs --privileged so it can access the host's binfmt_misc.
+ensure_binfmt() {
+    local host_arch
+    host_arch=$(uname -m)
+    local need_binfmt=0
+
+    case "${host_arch}:${ARCH}" in
+        x86_64:arm64|x86_64:aarch64) need_binfmt=1 ;;
+        aarch64:amd64|aarch64:x86_64) need_binfmt=1 ;;
+    esac
+
+    if [[ "$need_binfmt" == "1" ]]; then
+        log "Registering binfmt_misc handlers for cross-architecture build (${host_arch} -> ${ARCH})..."
+        if ! docker run --rm --privileged tonistiigi/binfmt --install all >/dev/null 2>&1; then
+            warn "Could not auto-register binfmt handlers."
+            warn "Run manually: docker run --privileged --rm tonistiigi/binfmt --install all"
+        fi
+    fi
+}
+
+# Map ARCH to mkosi architecture names
+mkosi_arch() {
+    case "$1" in
+        amd64|x86_64)  echo "x86-64" ;;
+        arm64|aarch64) echo "arm64" ;;
+        *)             echo "$1" ;;
+    esac
+}
+
 # Run mkosi inside Docker
 run_mkosi() {
-    run_in_builder "$BUILDER_IMAGE" "$@"
+    ensure_binfmt
+    run_in_builder "$BUILDER_IMAGE" --architecture="$(mkosi_arch "$ARCH")" "$@"
 }
 
 # Build the kernel (separate step, no mkosi overlay needed)
