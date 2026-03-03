@@ -13,7 +13,7 @@ update-ca-certificates --fresh 2>/dev/null || true
 
 # Enable core services
 for unit in systemd-networkd systemd-resolved systemd-timesyncd containerd captainos-banner \
-            tink-agent-setup tink-agent rsyslog rsyslog-hostname-reload.path; do
+            captainos-static-network tink-agent-setup tink-agent rsyslog rsyslog-hostname-reload.path; do
     systemctl enable "$unit" 2>/dev/null || true
 done
 

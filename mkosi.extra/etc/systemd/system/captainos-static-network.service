@@ -1,0 +1,17 @@
+[Unit]
+Description=Configure static networking from kernel cmdline (ipam=)
+DefaultDependencies=no
+Before=systemd-networkd.service
+After=systemd-tmpfiles-setup.service local-fs.target
+ConditionKernelCommandLine=ipam
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/captainos-static-network
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=captainos-static-network
+
+[Install]
+WantedBy=systemd-networkd.service

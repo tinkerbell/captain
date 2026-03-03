@@ -88,6 +88,8 @@ def run_in_builder(cfg: Config, *extra_args: str) -> None:
         f"FORCE_TOOLS={int(cfg.force_tools)}",
         "-e",
         f"FORCE_KERNEL={int(cfg.force_kernel)}",
+        "-e",
+        f"ISO_MODE={cfg.iso_mode}",
     ]
 
     # Mount kernel source if provided

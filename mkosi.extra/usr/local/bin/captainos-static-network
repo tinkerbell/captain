@@ -1,0 +1,251 @@
+#!/bin/bash
+# /usr/local/bin/captainos-static-network — Configure static networking from kernel cmdline.
+#
+# Parses the ipam= parameter from /proc/cmdline and generates
+# systemd-networkd configuration files under /run/systemd/network/.
+# These take priority over the default DHCP config in /etc/systemd/network/.
+#
+# Format: ipam=<mac>:<vlan-id>:<ip>:<netmask>:<gateway>:<hostname>:<dns>:<search>:<ntp>
+#
+# - mac:     Hyphen-separated MAC address (e.g. de-ad-be-ef-fe-ed)
+# - vlan-id: VLAN ID (empty to skip)
+# - ip:      IPv4 address (e.g. 192.168.2.193)
+# - netmask: Dotted netmask (e.g. 255.255.255.0) or CIDR prefix (e.g. 24)
+# - gateway: Default gateway
+# - hostname: System hostname
+# - dns:     Comma-separated DNS servers
+# - search:  Comma-separated search domains
+# - ntp:     Comma-separated NTP servers
+#
+# Example:
+#   ipam=de-ad-be-ef-fe-ed::192.168.2.193:255.255.255.0:192.168.2.1:myserver:1.1.1.1,8.8.8.8::132.163.97.1
+
+set -euo pipefail
+
+NETWORK_DIR="/run/systemd/network"
+
+# --- JSON logging (same style as tink-agent-setup) ---
+_json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g'; }
+_log() {
+    local level="$1" msg="$2"
+    shift 2
+    local ts
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local extra=""
+    while [[ $# -ge 2 ]]; do
+        extra="${extra},\"$(_json_escape "$1")\":\"$(_json_escape "$2")\""
+        shift 2
+    done
+    printf '{"time":"%s","level":"%s","msg":"%s"%s}\n' "$ts" "$level" "$(_json_escape "$msg")" "$extra"
+}
+log_info()  { _log "info"  "$@"; }
+log_error() { _log "error" "$@"; }
+
+# --- Helpers ---
+
+# Convert hyphen-separated MAC to colon-separated (de-ad-be-ef-fe-ed → de:ad:be:ef:fe:ed)
+mac_to_colon() {
+    printf '%s' "$1" | tr '-' ':'
+}
+
+# Convert dotted netmask to CIDR prefix length (255.255.255.0 → 24)
+# If already a number (CIDR), return it as-is.
+netmask_to_cidr() {
+    local mask="$1"
+    # If it's already a plain number, use it directly
+    if [[ "$mask" =~ ^[0-9]+$ ]] && [[ "$mask" -ge 0 ]] && [[ "$mask" -le 128 ]]; then
+        echo "$mask"
+        return
+    fi
+    # Convert dotted netmask
+    local nbits=0 octet
+    IFS='.' read -ra octets <<< "$mask"
+    for octet in "${octets[@]}"; do
+        case "$octet" in
+            255) nbits=$((nbits + 8)) ;;
+            254) nbits=$((nbits + 7)) ;;
+            252) nbits=$((nbits + 6)) ;;
+            248) nbits=$((nbits + 5)) ;;
+            240) nbits=$((nbits + 4)) ;;
+            224) nbits=$((nbits + 3)) ;;
+            192) nbits=$((nbits + 2)) ;;
+            128) nbits=$((nbits + 1)) ;;
+            0)   ;;
+            *)   log_error "invalid netmask octet" "octet" "$octet" "mask" "$mask"; return 1 ;;
+        esac
+    done
+    echo "$nbits"
+}
+
+# --- Parse ipam= from /proc/cmdline ---
+
+parse_ipam() {
+    local cmdline
+    cmdline=$(cat /proc/cmdline)
+
+    local ipam_value=""
+    for param in $cmdline; do
+        case "$param" in
+            ipam=*) ipam_value="${param#ipam=}" ;;
+        esac
+    done
+
+    if [[ -z "$ipam_value" ]]; then
+        log_error "no ipam= parameter found on kernel cmdline"
+        return 1
+    fi
+
+    # Split on colons — fields may be empty
+    IFS=':' read -ra FIELDS <<< "$ipam_value"
+
+    IPAM_MAC="${FIELDS[0]:-}"
+    IPAM_VLAN="${FIELDS[1]:-}"
+    IPAM_IP="${FIELDS[2]:-}"
+    IPAM_NETMASK="${FIELDS[3]:-}"
+    IPAM_GATEWAY="${FIELDS[4]:-}"
+    IPAM_HOSTNAME="${FIELDS[5]:-}"
+    IPAM_DNS="${FIELDS[6]:-}"
+    IPAM_SEARCH="${FIELDS[7]:-}"
+    IPAM_NTP="${FIELDS[8]:-}"
+
+    log_info "parsed ipam parameter" \
+        "mac" "$IPAM_MAC" \
+        "vlan" "$IPAM_VLAN" \
+        "ip" "$IPAM_IP" \
+        "netmask" "$IPAM_NETMASK" \
+        "gateway" "$IPAM_GATEWAY" \
+        "hostname" "$IPAM_HOSTNAME" \
+        "dns" "$IPAM_DNS" \
+        "search" "$IPAM_SEARCH" \
+        "ntp" "$IPAM_NTP"
+
+    # Validate required fields
+    if [[ -z "$IPAM_MAC" ]]; then
+        log_error "ipam= missing required MAC address field"
+        return 1
+    fi
+    if [[ -z "$IPAM_IP" ]]; then
+        log_error "ipam= missing required IP address field"
+        return 1
+    fi
+    if [[ -z "$IPAM_NETMASK" ]]; then
+        log_error "ipam= missing required netmask field"
+        return 1
+    fi
+}
+
+# --- Generate networkd configs ---
+
+write_network_config() {
+    mkdir -p "$NETWORK_DIR"
+
+    local mac_colon
+    mac_colon=$(mac_to_colon "$IPAM_MAC")
+
+    local cidr
+    cidr=$(netmask_to_cidr "$IPAM_NETMASK")
+
+    local interface_name="*"
+    local network_file="$NETWORK_DIR/10-static.network"
+
+    # If VLAN is specified, we need a parent .network and a .netdev
+    if [[ -n "$IPAM_VLAN" ]]; then
+        local vlan_name="vlan${IPAM_VLAN}"
+
+        # NetDev for the VLAN interface
+        cat > "$NETWORK_DIR/10-static-vlan.netdev" <<EOF
+[NetDev]
+Name=${vlan_name}
+Kind=vlan
+
+[VLAN]
+Id=${IPAM_VLAN}
+EOF
+        log_info "wrote VLAN netdev" "file" "$NETWORK_DIR/10-static-vlan.netdev" "vlan" "$IPAM_VLAN"
+
+        # Parent interface: match by MAC, attach VLAN
+        cat > "$NETWORK_DIR/10-static-parent.network" <<EOF
+[Match]
+MACAddress=${mac_colon}
+
+[Network]
+VLAN=${vlan_name}
+EOF
+        log_info "wrote parent network" "file" "$NETWORK_DIR/10-static-parent.network" "mac" "$mac_colon"
+
+        # The static IP goes on the VLAN sub-interface
+        network_file="$NETWORK_DIR/10-static.network"
+        cat > "$network_file" <<EOF
+[Match]
+Name=${vlan_name}
+
+[Network]
+Address=${IPAM_IP}/${cidr}
+EOF
+    else
+        # No VLAN: match by MAC directly
+        cat > "$network_file" <<EOF
+[Match]
+MACAddress=${mac_colon}
+
+[Network]
+Address=${IPAM_IP}/${cidr}
+EOF
+    fi
+
+    # Append optional fields
+    if [[ -n "$IPAM_GATEWAY" ]]; then
+        echo "Gateway=${IPAM_GATEWAY}" >> "$network_file"
+    fi
+
+    # DNS servers (comma-separated → one per line)
+    if [[ -n "$IPAM_DNS" ]]; then
+        IFS=',' read -ra dns_list <<< "$IPAM_DNS"
+        for dns in "${dns_list[@]}"; do
+            echo "DNS=${dns}" >> "$network_file"
+        done
+    fi
+
+    # NTP servers
+    if [[ -n "$IPAM_NTP" ]]; then
+        IFS=',' read -ra ntp_list <<< "$IPAM_NTP"
+        for ntp in "${ntp_list[@]}"; do
+            echo "NTP=${ntp}" >> "$network_file"
+        done
+    fi
+
+    # Search domains
+    if [[ -n "$IPAM_SEARCH" ]]; then
+        IFS=',' read -ra search_list <<< "$IPAM_SEARCH"
+        for domain in "${search_list[@]}"; do
+            echo "Domains=${domain}" >> "$network_file"
+        done
+    fi
+
+    log_info "wrote static network config" "file" "$network_file" "address" "${IPAM_IP}/${cidr}"
+}
+
+# --- Set hostname ---
+
+set_hostname() {
+    if [[ -z "${IPAM_HOSTNAME:-}" ]]; then
+        return
+    fi
+    echo "$IPAM_HOSTNAME" > /etc/hostname
+    hostname "$IPAM_HOSTNAME"
+    log_info "hostname set" "hostname" "$IPAM_HOSTNAME"
+}
+
+# --- Main ---
+
+main() {
+    log_info "configuring static network from kernel cmdline"
+
+    parse_ipam
+    write_network_config
+    set_hostname
+
+    log_info "static network configuration complete"
+}
+
+main "$@"

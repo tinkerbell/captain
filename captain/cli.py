@@ -9,7 +9,7 @@ import sys
 from argparse import ArgumentParser
 from pathlib import Path
 
-from captain import artifacts, docker, kernel, qemu, tools
+from captain import artifacts, docker, iso, kernel, qemu, tools
 from captain.config import Config
 from captain.log import for_stage
 from captain.util import check_kernel_dependencies, check_mkosi_dependencies, run
@@ -201,12 +201,58 @@ def _cmd_initramfs(cfg: Config, extra_args: list[str]) -> None:
     ilog.log("Initramfs build complete!")
 
 
+def _build_iso_stage(cfg: Config) -> None:
+    """Run the ISO build stage according to *cfg.iso_mode*."""
+    isolog = for_stage("iso")
+    match cfg.iso_mode:
+        case "skip":
+            isolog.log("ISO_MODE=skip — skipping ISO build")
+            return
+        case "native":
+            isolog.log("Building ISO (native)...")
+            iso.build(cfg)
+        case "docker":
+            docker.build_builder(cfg, logger=isolog)
+            isolog.log("Building ISO (docker)...")
+            docker.run_in_builder(
+                cfg,
+                "--entrypoint",
+                "python3",
+                cfg.builder_image,
+                "/work/scripts/build-iso.py",
+            )
+            # Fix ownership of Docker-created files (container runs as root)
+            uid = os.getuid()
+            gid = os.getgid()
+            isolog.log("Fixing ownership of ISO output files...")
+            run(
+                [
+                    "docker", "run", "--rm",
+                    "-v", f"{cfg.project_dir}:/work",
+                    "-w", "/work",
+                    "debian:trixie",
+                    "chown", "-R", f"{uid}:{gid}",
+                    f"/work/mkosi.output/iso",
+                    f"/work/mkosi.output/iso-staging",
+                ],
+            )
+
+
+def _cmd_iso(cfg: Config, _extra_args: list[str]) -> None:
+    """Build only the ISO image."""
+    isolog = for_stage("iso")
+    _build_iso_stage(cfg)
+    artifacts.collect(cfg, logger=isolog)
+    isolog.log("ISO build complete!")
+
+
 def _cmd_build(cfg: Config, extra_args: list[str]) -> None:
-    """Full build: kernel → tools → initramfs → artifacts."""
+    """Full build: kernel → tools → initramfs → iso → artifacts."""
     blog = for_stage("build")
     _build_kernel_stage(cfg)
     _build_tools_stage(cfg)
     _build_mkosi_stage(cfg, extra_args)
+    _build_iso_stage(cfg)
     artifacts.collect(cfg, logger=blog)
     blog.log("Build complete!")
 
@@ -246,12 +292,12 @@ def _cmd_clean(cfg: Config, _extra_args: list[str]) -> None:
                     "debian:trixie",
                     "sh",
                     "-c",
-                    "rm -rf /work/mkosi.output/image* /work/mkosi.output/initramfs /work/mkosi.output/vmlinuz /work/mkosi.output/extra-tree /work/mkosi.cache",
+                    "rm -rf /work/mkosi.output/image* /work/mkosi.output/initramfs /work/mkosi.output/vmlinuz /work/mkosi.output/extra-tree /work/mkosi.output/iso /work/mkosi.output/iso-staging /work/mkosi.cache",
                 ],
             )
     else:
         # No Docker available — remove directly (may need sudo for root-owned mkosi files)
-        for pattern in ("image*", "initramfs", "vmlinuz", "extra-tree"):
+        for pattern in ("image*", "initramfs", "vmlinuz", "extra-tree", "iso", "iso-staging"):
             for p in mkosi_output.glob(pattern):
                 if p.is_dir():
                     shutil.rmtree(p, ignore_errors=True)
@@ -304,6 +350,7 @@ environment variables:
   ARCH            Target architecture: amd64 (default) or arm64
   KERNEL_MODE     Kernel build mode: docker (default), native, or skip
   MKOSI_MODE      mkosi build mode: docker (default), native, or skip
+  ISO_MODE        ISO build mode: skip (default), docker, or native
   KERNEL_SRC      Path to local kernel source tree
   KERNEL_VERSION  Kernel version to build (default: 6.12.69)
   FORCE_KERNEL    Set to 1 to force kernel rebuild
@@ -320,13 +367,14 @@ examples:
   KERNEL_SRC=~/linux ./build.py               Use local kernel source
   FORCE_KERNEL=1 ./build.py                   Force kernel rebuild
   KERNEL_MODE=skip MKOSI_MODE=native build.py Skip kernel, native mkosi
+  ISO_MODE=docker ./build.py iso               Build ISO in Docker
   KERNEL_MODE=native ./build.py               Native kernel, Docker mkosi
   ./build.py shell                            Debug inside builder
   ./build.py qemu-test                        Boot test with QEMU"""
 
     parser = ArgumentParser(
         prog="build.py",
-        description="Build CaptainOS images. Stages: kernel → tools → initramfs.",
+        description="Build CaptainOS images. Stages: kernel → tools → initramfs → iso.",
         epilog=env_help,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -334,11 +382,12 @@ examples:
 
     sub.add_parser(
         "build",
-        help="Run all build stages: kernel → tools → initramfs (default)",
+        help="Run all build stages: kernel → tools → initramfs → iso (default)",
     )
     sub.add_parser("kernel", help="Build only the kernel + modules")
     sub.add_parser("tools", help="Download tools (containerd, runc, nerdctl, CNI)")
     sub.add_parser("initramfs", help="Build only the initramfs via mkosi")
+    sub.add_parser("iso", help="Build a UEFI-bootable ISO image")
     sub.add_parser("shell", help="Interactive shell inside the builder container")
     sub.add_parser("clean", help="Remove all build artifacts")
     sub.add_parser("summary", help="Print mkosi configuration summary")
@@ -403,6 +452,7 @@ example:
         "kernel": _cmd_kernel,
         "tools": _cmd_tools,
         "initramfs": _cmd_initramfs,
+        "iso": _cmd_iso,
         "shell": _cmd_shell,
         "clean": _cmd_clean,
         "summary": _cmd_summary,

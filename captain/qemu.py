@@ -60,6 +60,15 @@ def _tink_cmdline() -> str:
             )
             sys.exit(1)
         parts.append(f"{cmdline_key}={value}")
+
+    # Static networking via ipam= parameter
+    ipam = os.environ.get("IPAM", "")
+    if ipam:
+        if any(ch.isspace() for ch in ipam):
+            _log.err("IPAM must not contain whitespace.")
+            sys.exit(1)
+        parts.append(f"ipam={ipam}")
+
     return " ".join(parts)
 
 

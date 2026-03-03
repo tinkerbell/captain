@@ -176,3 +176,74 @@ jobs:
 
       - name: Build initramfs
         run: ./build.py initramfs
+
+      - name: Upload initramfs artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: initramfs-${{ matrix.arch }}
+          path: out/
+          retention-days: 1
+
+  # -------------------------------------------------------------------
+  # Build UEFI-bootable ISO (depends on initramfs)
+  # -------------------------------------------------------------------
+  build-iso:
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    needs: [build-initramfs]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    env:
+      ARCH: ${{ matrix.arch }}
+      KERNEL_MODE: skip
+      MKOSI_MODE: skip
+      ISO_MODE: docker
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute Dockerfile hash
+        id: dockerfile-hash
+        run: echo "hash=$(sha256sum Dockerfile | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker builder image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: |
+            captainos-builder
+            captainos-builder:${{ steps.dockerfile-hash.outputs.hash }}
+          cache-from: type=gha,scope=builder-${{ matrix.arch }}
+          cache-to: ${{ github.ref == 'refs/heads/main' && format('type=gha,scope=builder-{0},mode=max', matrix.arch) || '' }}
+
+      - name: Download kernel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: kernel-${{ matrix.arch }}
+          path: mkosi.output
+
+      - name: Download initramfs artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: initramfs-${{ matrix.arch }}
+          path: out
+
+      - name: Stage initramfs for ISO build
+        run: |
+          mkdir -p mkosi.output/initramfs/${{ matrix.arch }}
+          cp out/initramfs-${{ matrix.arch }}.cpio.zst mkosi.output/initramfs/${{ matrix.arch }}/image.cpio.zst
+
+      - name: Build ISO
+        run: ./build.py iso
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: iso-${{ matrix.arch }}
+          path: out/captainos-${{ matrix.arch }}.iso
+          retention-days: 1

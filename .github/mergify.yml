@@ -16,6 +16,8 @@ queue_rules:
       - check-success=build-kernel (arm64)
       - check-success=download-tools (amd64)
       - check-success=download-tools (arm64)
+      - check-success=build-iso (amd64)
+      - check-success=build-iso (arm64)
       - label!=do-not-merge
       - label=ready-to-merge
     merge_conditions:
@@ -32,6 +34,8 @@ queue_rules:
       - check-success=build-kernel (arm64)
       - check-success=download-tools (amd64)
       - check-success=download-tools (arm64)
+      - check-success=build-iso (amd64)
+      - check-success=build-iso (arm64)
       - label!=do-not-merge
       - label=ready-to-merge
       # This extra condition forces draft PR mode (prevents in-place checks)

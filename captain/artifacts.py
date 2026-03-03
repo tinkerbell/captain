@@ -74,6 +74,15 @@ def collect(cfg: Config, logger: StageLogger | None = None) -> None:
     else:
         _log.warn("No kernel image found in mkosi.output/vmlinuz/{arch}/")
 
+    # Collect ISO if present (may not exist when ISO_MODE=skip)
+    iso_dir = cfg.iso_output
+    iso_files = sorted(iso_dir.glob("*.iso")) if iso_dir.is_dir() else []
+    if iso_files:
+        iso_src = iso_files[0]
+        iso_dst = out / f"captainos-{cfg.arch}.iso"
+        shutil.copy2(iso_src, iso_dst)
+        _log.log(f"iso: {iso_dst} ({_human_size(iso_dst.stat().st_size)})")
+
     # Print checksums
     artifacts = sorted(out.iterdir())
     if artifacts:

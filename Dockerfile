@@ -54,6 +54,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     # Binary compression
     upx-ucl \
+    # ISO image creation
+    xorriso \
+    grub-common \
+    && GRUB_EFI_PKG="grub-efi-$(dpkg --print-architecture)-bin" \
+    && apt-get install -y --no-install-recommends "$GRUB_EFI_PKG" \
     && rm -rf /var/lib/apt/lists/*
 
 # Install mkosi from GitHub (not on PyPI)

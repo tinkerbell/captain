@@ -33,6 +33,7 @@ class Config:
     # Per-stage mode: "docker" | "native" | "skip"
     kernel_mode: str = "docker"
     mkosi_mode: str = "docker"
+    iso_mode: str = "skip"
 
     # Force flags
     force_kernel: bool = False
@@ -51,7 +52,11 @@ class Config:
 
     def __post_init__(self) -> None:
         self.arch_info = get_arch_info(self.arch)
-        for name, value in (("KERNEL_MODE", self.kernel_mode), ("MKOSI_MODE", self.mkosi_mode)):
+        for name, value in (
+            ("KERNEL_MODE", self.kernel_mode),
+            ("MKOSI_MODE", self.mkosi_mode),
+            ("ISO_MODE", self.iso_mode),
+        ):
             if value not in VALID_MODES:
                 print(
                     f"ERROR: {name}={value!r} is invalid. "
@@ -63,7 +68,11 @@ class Config:
     @property
     def needs_docker(self) -> bool:
         """True if any stage requires Docker."""
-        return self.kernel_mode == "docker" or self.mkosi_mode == "docker"
+        return (
+            self.kernel_mode == "docker"
+            or self.mkosi_mode == "docker"
+            or self.iso_mode == "docker"
+        )
 
     @classmethod
     def from_env(cls, project_dir: Path) -> Config:
@@ -81,6 +90,7 @@ class Config:
             no_cache=os.environ.get("NO_CACHE") == "1",
             kernel_mode=os.environ.get("KERNEL_MODE", "docker"),
             mkosi_mode=os.environ.get("MKOSI_MODE", "docker"),
+            iso_mode=os.environ.get("ISO_MODE", "skip"),
             force_kernel=os.environ.get("FORCE_KERNEL") == "1",
             force_tools=os.environ.get("FORCE_TOOLS") == "1",
             qemu_append=os.environ.get("QEMU_APPEND", ""),
@@ -114,3 +124,13 @@ class Config:
     def initramfs_output(self) -> Path:
         """Per-arch directory for mkosi initramfs output (image.cpio.zst)."""
         return self.project_dir / "mkosi.output" / "initramfs" / self.arch
+
+    @property
+    def iso_output(self) -> Path:
+        """Per-arch directory for the built ISO image."""
+        return self.project_dir / "mkosi.output" / "iso" / self.arch
+
+    @property
+    def iso_staging(self) -> Path:
+        """Per-arch staging directory for assembling the ISO filesystem."""
+        return self.project_dir / "mkosi.output" / "iso-staging" / self.arch
