@@ -59,6 +59,7 @@ COMMANDS: dict[str, str] = {
     "tools": "Download tools (containerd, runc, nerdctl, CNI)",
     "initramfs": "Build only the initramfs via mkosi",
     "iso": "Build a UEFI-bootable ISO image",
+    "checksums": "Compute SHA-256 checksums for specified files",
     "shell": "Interactive shell inside the builder container",
     "clean": "Remove all build artifacts",
     "summary": "Print mkosi configuration summary",
@@ -256,6 +257,19 @@ def _add_mode_flags(parser: configargparse.ArgParser) -> None:
         )
 
 
+def _add_checksums_flags(parser: configargparse.ArgParser) -> None:
+    """--output and positional file arguments for the checksums command."""
+    g = parser.add_argument_group("checksums")
+    g.add_argument(
+        "--output", "-o", metavar="FILE", default=None,
+        help="path to write the checksum file (default: out/sha256sums-{arch}.txt)",
+    )
+    g.add_argument(
+        "files", nargs="*", metavar="FILE",
+        help="files to checksum (default: standard release artifacts in out/)",
+    )
+
+
 def _add_qemu_flags(parser: configargparse.ArgParser) -> None:
     """--qemu-append, --qemu-mem, --qemu-smp"""
     g = parser.add_argument_group("qemu")
@@ -334,6 +348,7 @@ _COMMAND_FLAGS: dict[str, list[object]] = {
     "tools":     [_add_common_flags, _add_tools_flags],
     "initramfs": [_add_common_flags, _add_mkosi_flags],
     "iso":       [_add_common_flags, _add_iso_flags],
+    "checksums": [_add_common_flags, _add_checksums_flags],
     "shell":     [_add_common_flags],
     "clean":     [],
     "summary":   [_add_common_flags, _add_summary_flags],
@@ -566,9 +581,7 @@ def _cmd_initramfs(cfg: Config, extra_args: list[str]) -> None:
     _build_mkosi_stage(cfg, extra_args)
     artifacts.collect_initramfs(cfg, logger=ilog)
     artifacts.collect_kernel(cfg, logger=ilog)
-    artifacts.collect_checksums(cfg, logger=ilog)
     ilog.log("Initramfs build complete!")
-
 
 
 def _cmd_iso(cfg: Config, _extra_args: list[str]) -> None:
@@ -576,7 +589,6 @@ def _cmd_iso(cfg: Config, _extra_args: list[str]) -> None:
     isolog = for_stage("iso")
     _build_iso_stage(cfg)
     artifacts.collect_iso(cfg, logger=isolog)
-    artifacts.collect_checksums(cfg, logger=isolog)
     isolog.log("ISO build complete!")
 
 
@@ -662,6 +674,38 @@ def _cmd_summary(cfg: Config, _extra_args: list[str]) -> None:
             raise SystemExit(1)
 
 
+def _cmd_checksums(cfg: Config, _extra_args: list[str], args: object = None) -> None:
+    """Compute SHA-256 checksums for the specified files."""
+    clog = for_stage("checksums")
+    files = getattr(args, "files", None) or []
+    output = getattr(args, "output", None)
+
+    if files:
+        # Explicit mode: user provided specific files and output.
+        if not output:
+            clog.err("--output is required when specifying files explicitly.")
+            raise SystemExit(1)
+        artifacts.collect_checksums(
+            [Path(f) for f in files], Path(output), logger=clog,
+        )
+    else:
+        # Default mode: produce checksums for the selected architecture.
+        out = cfg.output_dir
+        arch = cfg.arch
+        arch_files = [
+            out / f"vmlinuz-{arch}",
+            out / f"initramfs-{arch}.cpio.zst",
+            out / f"captainos-{arch}.iso",
+        ]
+        existing = [f for f in arch_files if f.is_file()]
+        if not existing:
+            clog.err(f"No artifacts found for {arch} in {out}")
+            raise SystemExit(1)
+        dest = Path(output) if output else out / f"sha256sums-{arch}.txt"
+        artifacts.collect_checksums(existing, dest, logger=clog)
+    clog.log("Checksums complete!")
+
+
 def _cmd_qemu_test(cfg: Config, _extra_args: list[str], args: object = None) -> None:
     """Boot the image in QEMU for testing."""
     qemu.run_qemu(cfg, args=args)  # type: ignore[arg-type]
@@ -701,6 +745,7 @@ def main(project_dir: Path | None = None) -> None:
         "tools": _cmd_tools,
         "initramfs": _cmd_initramfs,
         "iso": _cmd_iso,
+        "checksums": _cmd_checksums,
         "shell": _cmd_shell,
         "clean": _cmd_clean,
         "summary": _cmd_summary,
@@ -709,7 +754,7 @@ def main(project_dir: Path | None = None) -> None:
 
     handler = dispatch.get(command)
     if handler is not None:
-        if command == "qemu-test":
+        if command in ("qemu-test", "checksums"):
             handler(cfg, extra, args=args)  # type: ignore[operator]
         else:
             handler(cfg, extra)  # type: ignore[operator]

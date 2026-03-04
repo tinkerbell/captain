@@ -73,18 +73,40 @@ def collect_iso(cfg: Config, logger: StageLogger | None = None) -> None:
         _log.log(f"iso: {iso_dst} ({_human_size(iso_dst.stat().st_size)})")
 
 
-def collect_checksums(cfg: Config, logger: StageLogger | None = None) -> None:
-    """Print SHA-256 checksums for all artifacts in out/."""
+def collect_checksums(
+    files: list[Path],
+    output: Path,
+    logger: StageLogger | None = None,
+) -> None:
+    """Compute SHA-256 checksums for *files* and write them to *output*.
+
+    The checksum file uses the standard ``sha256sum`` format::
+
+        <hex-digest>  <filename>
+
+    Only the bare filename (no directory component) is recorded so that
+    ``sha256sum -c`` works from the directory containing the files.
+    """
     _log = logger or _default_log
-    out = cfg.output_dir
-    if not out.is_dir():
-        return
-    artifact_files = sorted(f for f in out.iterdir() if f.is_file())
-    if artifact_files:
-        _log.log("Checksums:")
-        for artifact in artifact_files:
-            digest = _sha256(artifact)
-            print(f"  {digest}  {artifact}")
+    lines: list[str] = []
+    for path in files:
+        if not path.is_file():
+            _log.warn(f"Skipping missing file: {path}")
+            continue
+        digest = _sha256(path)
+        lines.append(f"{digest}  {path.name}")
+    if lines:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text("\n".join(lines) + "\n")
+        _log.log(f"Wrote checksums to {output}")
+        for line in lines:
+            _log.log(f"  {line}")
+    else:
+        # All specified files were missing or non-regular; no checksums written.
+        _log.warn(
+            f"No checksums were written for {len(files)} requested file(s); "
+            "no output checksum file was created."
+        )
 
 
 def collect(cfg: Config, logger: StageLogger | None = None) -> None:
@@ -94,4 +116,3 @@ def collect(cfg: Config, logger: StageLogger | None = None) -> None:
     collect_initramfs(cfg, logger=_log)
     collect_kernel(cfg, logger=_log)
     collect_iso(cfg, logger=_log)
-    collect_checksums(cfg, logger=_log)

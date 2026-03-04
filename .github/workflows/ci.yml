@@ -3,12 +3,14 @@ on:
   push:
     branches:
       - "main"
-    tags:
-      - "v**"
   pull_request:
 
 env:
   KERNEL_VERSION: "6.12.69"
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
   # -------------------------------------------------------------------
@@ -298,3 +300,87 @@ jobs:
           name: iso-${{ matrix.arch }}
           path: out/captainos-${{ matrix.arch }}.iso
           retention-days: 1
+
+  # -------------------------------------------------------------------
+  # Collect release artifacts and compute checksums
+  # -------------------------------------------------------------------
+  release-artifacts:
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    needs: [build-iso]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    env:
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Load shared config
+        run: cat .github/config.env >> "$GITHUB_ENV"
+
+      - name: Download kernel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: kernel-${{ matrix.arch }}
+          path: mkosi.output
+
+      - name: Download initramfs artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: initramfs-${{ matrix.arch }}
+          path: out
+
+      - name: Download ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: iso-${{ matrix.arch }}
+          path: out
+
+      - name: Collect vmlinuz
+        run: |
+          src=$(ls mkosi.output/vmlinuz/${{ matrix.arch }}/vmlinuz-* | head -1)
+          cp "$src" out/vmlinuz-${{ matrix.arch }}
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compute checksums
+        run: |
+          ./build.py checksums \
+            --output out/sha256sums-${{ matrix.arch }}.txt \
+            out/vmlinuz-${{ matrix.arch }} \
+            out/initramfs-${{ matrix.arch }}.cpio.zst \
+            out/captainos-${{ matrix.arch }}.iso
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: out/
+          retention-days: 1
+
+      - name: Log in to GHCR
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install ORAS
+        if: github.ref == 'refs/heads/main'
+        uses: oras-project/setup-oras@v1
+
+      - name: Push release artifacts to GHCR
+        if: github.ref == 'refs/heads/main'
+        run: |
+          oras push \
+            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ github.sha }}-${{ matrix.arch }} \
+            --annotation org.opencontainers.image.source=https://github.com/${{ github.repository }} \
+            --annotation org.opencontainers.image.revision=${{ github.sha }} \
+            out/vmlinuz-${{ matrix.arch }} \
+            out/initramfs-${{ matrix.arch }}.cpio.zst \
+            out/captainos-${{ matrix.arch }}.iso \
+            out/sha256sums-${{ matrix.arch }}.txt
