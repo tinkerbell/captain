@@ -57,8 +57,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # ISO image creation
     xorriso \
     grub-common \
-    && GRUB_EFI_PKG="grub-efi-$(dpkg --print-architecture)-bin" \
-    && apt-get install -y --no-install-recommends "$GRUB_EFI_PKG" \
+    && NATIVE_ARCH="$(dpkg --print-architecture)" \
+    && FOREIGN_ARCH=$([ "$NATIVE_ARCH" = "amd64" ] && echo "arm64" || echo "amd64") \
+    && apt-get install -y --no-install-recommends "grub-efi-${NATIVE_ARCH}-bin" \
+    && dpkg --add-architecture "$FOREIGN_ARCH" \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends "grub-efi-${FOREIGN_ARCH}-bin:${FOREIGN_ARCH}" \
     && rm -rf /var/lib/apt/lists/*
 
 # Install mkosi from GitHub (not on PyPI)

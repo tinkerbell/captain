@@ -101,8 +101,14 @@ def _extract_command(argv: list[str]) -> tuple[str, list[str]]:
         # Standalone positional token — check if it's a command.
         if tok in COMMANDS:
             return tok, argv[:i] + argv[i + 1 :]
-        # Non-flag, non-command token — stop scanning.
-        break
+        # Unknown positional token — not a recognised command.
+        valid = ", ".join(COMMANDS)
+        print(
+            f"error: unknown command '{tok}'\n"
+            f"valid commands: {valid}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     return "build", list(argv)
 
 
