@@ -1,7 +1,8 @@
 """Download pinned binary tools (containerd, runc, nerdctl, CNI plugins).
 
-Replaces scripts/download-tools.sh.  Downloads use urllib; extraction uses
-the tarfile module — no curl or tar dependency required.
+Downloads use urllib; extraction uses the tarfile module — no curl or tar
+dependency required.  Called directly by ``cli._build_tools_stage`` in
+both native and Docker modes.
 """
 
 from __future__ import annotations

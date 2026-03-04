@@ -122,9 +122,6 @@ CaptainOS reads provisioning configuration from the kernel command line:
 ├── config/
 │   ├── defconfig.amd64         # Kernel config for x86_64
 │   └── defconfig.arm64         # Kernel config for aarch64
-├── scripts/
-│   ├── build-kernel.py         # In-container kernel build entry point
-│   └── download-tools.py       # In-container tool download entry point
 └── mkosi.extra/                # Files overlaid into the image
     ├── init                    # Custom PID 1 (rootfs → tmpfs → systemd)
     └── etc/

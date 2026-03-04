@@ -1,7 +1,8 @@
-"""Build configuration populated from environment variables."""
+"""Build configuration populated from CLI args / environment variables."""
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from dataclasses import dataclass, field
@@ -32,12 +33,14 @@ class Config:
 
     # Per-stage mode: "docker" | "native" | "skip"
     kernel_mode: str = "docker"
+    tools_mode: str = "docker"
     mkosi_mode: str = "docker"
-    iso_mode: str = "skip"
+    iso_mode: str = "docker"
 
     # Force flags
     force_kernel: bool = False
     force_tools: bool = False
+    force_iso: bool = False
 
     # QEMU
     qemu_append: str = ""
@@ -54,6 +57,7 @@ class Config:
         self.arch_info = get_arch_info(self.arch)
         for name, value in (
             ("KERNEL_MODE", self.kernel_mode),
+            ("TOOLS_MODE", self.tools_mode),
             ("MKOSI_MODE", self.mkosi_mode),
             ("ISO_MODE", self.iso_mode),
         ):
@@ -70,15 +74,49 @@ class Config:
         """True if any stage requires Docker."""
         return (
             self.kernel_mode == "docker"
+            or self.tools_mode == "docker"
             or self.mkosi_mode == "docker"
             or self.iso_mode == "docker"
         )
 
     @classmethod
-    def from_env(cls, project_dir: Path) -> Config:
-        """Create a Config from environment variables.
+    def from_args(cls, args: argparse.Namespace, project_dir: Path) -> Config:
+        """Create a Config from a parsed :class:`argparse.Namespace`.
 
-        KERNEL_MODE / MKOSI_MODE accept "docker" (default), "native", or "skip".
+        The *args* namespace is produced by :mod:`configargparse` which
+        has already resolved the priority chain:
+        CLI flags > environment variables > defaults.
+
+        ``getattr`` with fallbacks is used because per-subcommand
+        parsers only define the flags relevant to that subcommand.
+        """
+        return cls(
+            project_dir=project_dir,
+            output_dir=project_dir / "out",
+            arch=getattr(args, "arch", "amd64"),
+            kernel_version=getattr(args, "kernel_version", "6.12.69"),
+            kernel_src=getattr(args, "kernel_src", None) or None,
+            builder_image=getattr(args, "builder_image", "captainos-builder"),
+            no_cache=getattr(args, "no_cache", False),
+            kernel_mode=getattr(args, "kernel_mode", "docker"),
+            tools_mode=getattr(args, "tools_mode", "docker"),
+            mkosi_mode=getattr(args, "mkosi_mode", "docker"),
+            iso_mode=getattr(args, "iso_mode", "docker"),
+            force_kernel=getattr(args, "force_kernel", False),
+            force_tools=getattr(args, "force_tools", False),
+            force_iso=getattr(args, "force_iso", False),
+            qemu_append=getattr(args, "qemu_append", ""),
+            qemu_mem=getattr(args, "qemu_mem", "2G"),
+            qemu_smp=getattr(args, "qemu_smp", "2"),
+        )
+
+    @classmethod
+    def from_env(cls, project_dir: Path) -> Config:
+        """Create a Config from environment variables (legacy helper).
+
+        Prefer :meth:`from_args` in the CLI path.  This method remains
+        for any non-CLI callers (e.g. tests, scripts) that need a
+        ``Config`` without going through argparse.
         """
         return cls(
             project_dir=project_dir,
@@ -89,10 +127,12 @@ class Config:
             builder_image=os.environ.get("BUILDER_IMAGE", "captainos-builder"),
             no_cache=os.environ.get("NO_CACHE") == "1",
             kernel_mode=os.environ.get("KERNEL_MODE", "docker"),
+            tools_mode=os.environ.get("TOOLS_MODE", "docker"),
             mkosi_mode=os.environ.get("MKOSI_MODE", "docker"),
-            iso_mode=os.environ.get("ISO_MODE", "skip"),
+            iso_mode=os.environ.get("ISO_MODE", "docker"),
             force_kernel=os.environ.get("FORCE_KERNEL") == "1",
             force_tools=os.environ.get("FORCE_TOOLS") == "1",
+            force_iso=os.environ.get("FORCE_ISO") == "1",
             qemu_append=os.environ.get("QEMU_APPEND", ""),
             qemu_mem=os.environ.get("QEMU_MEM", "2G"),
             qemu_smp=os.environ.get("QEMU_SMP", "2"),

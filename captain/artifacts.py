@@ -32,7 +32,7 @@ def _human_size(size: int) -> str:
 
 
 def collect_kernel(cfg: Config, logger: StageLogger | None = None) -> None:
-    """Copy just the kernel image from mkosi.output/vmlinuz/{arch}/ to out/."""
+    """Copy the kernel image from mkosi.output/vmlinuz/{arch}/ to out/."""
     _log = logger or _default_log
     out = ensure_dir(cfg.output_dir)
     vmlinuz_dir = cfg.vmlinuz_output
@@ -46,13 +46,10 @@ def collect_kernel(cfg: Config, logger: StageLogger | None = None) -> None:
         _log.warn("No kernel image found in mkosi.output/vmlinuz/{arch}/")
 
 
-def collect(cfg: Config, logger: StageLogger | None = None) -> None:
-    """Copy initramfs and kernel images from mkosi.output/ to out/."""
+def collect_initramfs(cfg: Config, logger: StageLogger | None = None) -> None:
+    """Copy the initramfs CPIO from mkosi.output/initramfs/{arch}/ to out/."""
     _log = logger or _default_log
-    _log.log("Collecting build artifacts...")
     out = ensure_dir(cfg.output_dir)
-
-    # Find the initrd CPIO output
     cpio_files = sorted(cfg.initramfs_output.glob("*.cpio*"))
     if cpio_files:
         initrd_src = cpio_files[0]
@@ -62,19 +59,11 @@ def collect(cfg: Config, logger: StageLogger | None = None) -> None:
     else:
         _log.warn("No initramfs CPIO found in mkosi.output/initramfs/{arch}/")
 
-    # Find the kernel image (stored outside ExtraTrees so it doesn't bloat
-    # the initramfs — iPXE loads the kernel separately).
-    vmlinuz_dir = cfg.vmlinuz_output
-    vmlinuz_files = sorted(vmlinuz_dir.glob("vmlinuz-*")) if vmlinuz_dir.is_dir() else []
-    if vmlinuz_files:
-        vmlinuz_src = vmlinuz_files[0]
-        vmlinuz_dst = out / f"vmlinuz-{cfg.arch}"
-        shutil.copy2(vmlinuz_src, vmlinuz_dst)
-        _log.log(f"kernel: {vmlinuz_dst} ({_human_size(vmlinuz_dst.stat().st_size)})")
-    else:
-        _log.warn("No kernel image found in mkosi.output/vmlinuz/{arch}/")
 
-    # Collect ISO if present (may not exist when ISO_MODE=skip)
+def collect_iso(cfg: Config, logger: StageLogger | None = None) -> None:
+    """Copy the ISO image from mkosi.output/iso/{arch}/ to out/."""
+    _log = logger or _default_log
+    out = ensure_dir(cfg.output_dir)
     iso_dir = cfg.iso_output
     iso_files = sorted(iso_dir.glob("*.iso")) if iso_dir.is_dir() else []
     if iso_files:
@@ -83,11 +72,26 @@ def collect(cfg: Config, logger: StageLogger | None = None) -> None:
         shutil.copy2(iso_src, iso_dst)
         _log.log(f"iso: {iso_dst} ({_human_size(iso_dst.stat().st_size)})")
 
-    # Print checksums
-    artifacts = sorted(out.iterdir())
-    if artifacts:
+
+def collect_checksums(cfg: Config, logger: StageLogger | None = None) -> None:
+    """Print SHA-256 checksums for all artifacts in out/."""
+    _log = logger or _default_log
+    out = cfg.output_dir
+    if not out.is_dir():
+        return
+    artifact_files = sorted(f for f in out.iterdir() if f.is_file())
+    if artifact_files:
         _log.log("Checksums:")
-        for artifact in artifacts:
-            if artifact.is_file():
-                digest = _sha256(artifact)
-                print(f"  {digest}  {artifact}")
+        for artifact in artifact_files:
+            digest = _sha256(artifact)
+            print(f"  {digest}  {artifact}")
+
+
+def collect(cfg: Config, logger: StageLogger | None = None) -> None:
+    """Copy initramfs, kernel, and ISO images from mkosi.output/ to out/."""
+    _log = logger or _default_log
+    _log.log("Collecting build artifacts...")
+    collect_initramfs(cfg, logger=_log)
+    collect_kernel(cfg, logger=_log)
+    collect_iso(cfg, logger=_log)
+    collect_checksums(cfg, logger=_log)

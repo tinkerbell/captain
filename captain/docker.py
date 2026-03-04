@@ -89,7 +89,17 @@ def run_in_builder(cfg: Config, *extra_args: str) -> None:
         "-e",
         f"FORCE_KERNEL={int(cfg.force_kernel)}",
         "-e",
-        f"ISO_MODE={cfg.iso_mode}",
+        f"FORCE_ISO={int(cfg.force_iso)}",
+        # Force all stage modes to native inside the container so
+        # build.py never tries to launch Docker recursively.
+        "-e",
+        "KERNEL_MODE=native",
+        "-e",
+        "TOOLS_MODE=native",
+        "-e",
+        "MKOSI_MODE=native",
+        "-e",
+        "ISO_MODE=native",
     ]
 
     # Mount kernel source if provided
@@ -148,3 +158,53 @@ def ensure_binfmt(cfg: Config, logger: StageLogger | None = None) -> None:
     if result.returncode != 0:
         _log.warn("Could not auto-register binfmt handlers.")
         _log.warn("Run manually: docker run --privileged --rm tonistiigi/binfmt --install all")
+
+
+def fix_docker_ownership(cfg: Config, logger, paths: list[str]) -> None:
+    """Fix ownership of Docker-created files (container runs as root).
+
+    Spawns a lightweight container to ``chown -R`` the given paths
+    back to the calling user so that subsequent native-mode stages
+    and the host user can read/write them.
+
+    Idempotent: skips the chown if every path either does not exist
+    or is already owned by the current user.
+    """
+    uid = os.getuid()
+    gid = os.getgid()
+
+    # *paths* use the container mount prefix /work — translate to host.
+    # Check the path itself **and** every child — the top-level directory
+    # may already be owned by the host user while files inside it were
+    # created by the container (root).
+    needs_fix: list[str] = []
+    for p in paths:
+        host_path = Path(p.replace("/work", str(cfg.project_dir), 1))
+        if not host_path.exists():
+            continue
+        check_paths = [host_path]
+        if host_path.is_dir():
+            check_paths.extend(host_path.rglob("*"))
+        for cp in check_paths:
+            try:
+                st = cp.stat()
+            except OSError:
+                continue
+            if st.st_uid != uid or st.st_gid != gid:
+                needs_fix.append(p)
+                break
+
+    if not needs_fix:
+        return
+
+    logger.log("Fixing ownership of Docker-created files...")
+    run(
+        [
+            "docker", "run", "--rm",
+            "-v", f"{cfg.project_dir}:/work",
+            "-w", "/work",
+            "debian:trixie",
+            "chown", "-R", f"{uid}:{gid}",
+            *needs_fix,
+        ],
+    )

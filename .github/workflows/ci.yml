@@ -62,6 +62,9 @@ jobs:
             mkosi.output/vmlinuz/${{ matrix.arch }}
           key: kernel-${{ matrix.arch }}-${{ env.KERNEL_VERSION }}-${{ hashFiles('config/defconfig.*', 'Dockerfile') }}
 
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
       - name: Build kernel
         run: ./build.py kernel
 
@@ -111,6 +114,9 @@ jobs:
             mkosi.output/extra-tree/${{ matrix.arch }}/usr/local/bin
             mkosi.output/extra-tree/${{ matrix.arch }}/opt/cni
           key: tools-${{ matrix.arch }}-${{ hashFiles('captain/tools.py') }}
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
 
       - name: Download tools
         run: ./build.py tools
@@ -173,6 +179,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
 
       - name: Build initramfs
         run: ./build.py initramfs
@@ -237,6 +246,9 @@ jobs:
         run: |
           mkdir -p mkosi.output/initramfs/${{ matrix.arch }}
           cp out/initramfs-${{ matrix.arch }}.cpio.zst mkosi.output/initramfs/${{ matrix.arch }}/image.cpio.zst
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
 
       - name: Build ISO
         run: ./build.py iso

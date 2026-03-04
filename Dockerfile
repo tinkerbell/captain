@@ -63,6 +63,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install mkosi from GitHub (not on PyPI)
 RUN pip3 install --break-system-packages \
+    configargparse \
     "git+https://github.com/systemd/mkosi.git@${MKOSI_VERSION}"
 
 # Verify mkosi is functional

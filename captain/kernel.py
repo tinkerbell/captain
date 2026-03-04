@@ -1,7 +1,9 @@
 """Kernel download, configuration, compilation, and installation.
 
-This module replaces scripts/build-kernel.sh.  Heavy lifting (make, strip)
-is still done via subprocess — only the orchestration moves to Python.
+Heavy lifting (make, strip) is still done via subprocess — only the
+orchestration is in Python.  Called directly by ``cli._build_kernel_stage``
+in both native and Docker modes (inside the container ``build.py kernel``
+re-enters via the CLI with all modes forced to native).
 """
 
 from __future__ import annotations
