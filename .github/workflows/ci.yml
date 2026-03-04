@@ -12,10 +12,45 @@ env:
 
 jobs:
   # -------------------------------------------------------------------
+  # Fast cache lookup – decides whether the OCI runner is needed
+  # There are consistent issues with OCI runners not getting scheduled.
+  # This is the workaround.
+  # -------------------------------------------------------------------
+  check-kernel-cache:
+    runs-on: ubuntu-latest
+    outputs:
+      amd64-cache-hit: ${{ steps.amd64-cache.outputs.cache-hit }}
+      arm64-cache-hit: ${{ steps.arm64-cache.outputs.cache-hit }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Check amd64 kernel cache
+        id: amd64-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/unused
+          key: kernel-amd64-${{ env.KERNEL_VERSION }}-${{ hashFiles('config/defconfig.*', 'Dockerfile') }}
+          lookup-only: true
+
+      - name: Check arm64 kernel cache
+        id: arm64-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/unused
+          key: kernel-arm64-${{ env.KERNEL_VERSION }}-${{ hashFiles('config/defconfig.*', 'Dockerfile') }}
+          lookup-only: true
+
+  # -------------------------------------------------------------------
   # Build kernel (vmlinuz + modules) inside Docker
   # -------------------------------------------------------------------
   build-kernel:
-    runs-on: ${{ github.repository != 'tinkerbell/captain' && matrix.fork_runner || fromJSON(matrix.mainline_runner) }}
+    needs: [check-kernel-cache]
+    # Forks / cache-hit → cheap default runner; mainline cache-miss → fast oracle runner
+    runs-on: >
+      ${{ github.repository != 'tinkerbell/captain' && matrix.fork_runner
+        || needs.check-kernel-cache.outputs[format('{0}-cache-hit', matrix.arch)] == 'true' && matrix.fork_runner
+        || fromJSON(matrix.mainline_runner) }}
     strategy:
       fail-fast: false
       matrix:
