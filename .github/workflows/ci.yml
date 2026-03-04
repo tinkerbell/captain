@@ -302,9 +302,9 @@ jobs:
           retention-days: 1
 
   # -------------------------------------------------------------------
-  # Collect release artifacts and compute checksums
+  # Publish artifacts and compute checksums
   # -------------------------------------------------------------------
-  release-artifacts:
+  publish-artifacts:
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     needs: [build-iso]
     strategy:
@@ -354,13 +354,6 @@ jobs:
             out/initramfs-${{ matrix.arch }}.cpio.zst \
             out/captainos-${{ matrix.arch }}.iso
 
-      - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ matrix.arch }}
-          path: out/
-          retention-days: 1
-
       - name: Log in to GHCR
         if: github.ref == 'refs/heads/main'
         uses: docker/login-action@v3
@@ -373,11 +366,15 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: oras-project/setup-oras@v1
 
-      - name: Push release artifacts to GHCR
+      - name: Compute short SHA
+        id: short-sha
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Push artifacts to GHCR
         if: github.ref == 'refs/heads/main'
         run: |
           oras push \
-            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ github.sha }}-${{ matrix.arch }} \
+            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.short-sha.outputs.sha }}-${{ matrix.arch }} \
             --annotation org.opencontainers.image.source=https://github.com/${{ github.repository }} \
             --annotation org.opencontainers.image.revision=${{ github.sha }} \
             out/vmlinuz-${{ matrix.arch }} \

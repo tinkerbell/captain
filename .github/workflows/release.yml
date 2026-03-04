@@ -28,11 +28,15 @@ jobs:
       - name: Load shared config
         run: cat .github/config.env >> "$GITHUB_ENV"
 
+      - name: Compute short SHA
+        id: short-sha
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Pull release artifacts (amd64)
-        run: oras pull ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ github.sha }}-amd64 -o artifacts/amd64/
+        run: oras pull ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.short-sha.outputs.sha }}-amd64 -o artifacts/amd64/
 
       - name: Pull release artifacts (arm64)
-        run: oras pull ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ github.sha }}-arm64 -o artifacts/arm64/
+        run: oras pull ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.short-sha.outputs.sha }}-arm64 -o artifacts/arm64/
 
       - name: Create GitHub Release
         env:
@@ -47,8 +51,8 @@ jobs:
       - name: Tag OCI artifacts with version
         run: |
           oras tag \
-            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ github.sha }}-amd64 \
+            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.short-sha.outputs.sha }}-amd64 \
             ${{ github.ref_name }}-amd64
           oras tag \
-            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ github.sha }}-arm64 \
+            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.short-sha.outputs.sha }}-arm64 \
             ${{ github.ref_name }}-arm64
