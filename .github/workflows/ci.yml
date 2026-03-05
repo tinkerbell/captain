@@ -411,7 +411,7 @@ jobs:
         working-directory: out
         run: |
           oras push \
-            --platform linux/${{ matrix.arch }} \
+            --artifact-platform linux/${{ matrix.arch }} \
             ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.short-sha.outputs.sha }}-${{ matrix.arch }} \
             --annotation org.opencontainers.image.source=https://github.com/${{ github.repository }} \
             --annotation org.opencontainers.image.revision=${{ github.sha }} \
