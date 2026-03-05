@@ -16,57 +16,97 @@ It is built with [mkosi](https://github.com/systemd/mkosi), producing a minimal 
 
 ## How it works
 
-1. The machine PXE boots a kernel (`vmlinuz`) and initramfs (`initramfs.cpio.zst`)
+1. The machine PXE boots the kernel (`vmlinuz`) and initramfs (`initramfs.cpio.zst`) or runs the UEFI-bootable ISO image
 2. A custom `/init` script transitions the rootfs to tmpfs, then exec's systemd
 3. systemd-networkd configures DHCP on all ethernet interfaces
 4. containerd starts, then `tink-agent-setup` pulls the tink-agent container image (configured via kernel cmdline), extracts the binary, and runs it as a host process
 5. tink-agent connects to the Tinkerbell server and executes provisioning workflows
 
-## Building
+## Architecture
 
-**Prerequisites:** Python >= 3.10, Docker
+The build has four stages:
+
+1. **Kernel compilation** (`./build.py kernel`) — builds a Linux kernel from source using minimal defconfigs (`config/defconfig.{amd64,arm64}`)
+2. **Tool download** (`./build.py tools`) — fetches pinned binary releases of the container runtime stack
+3. **Initramfs build** (`./build.py initramfs`) — assembles a Debian Trixie CPIO initramfs with systemd, injecting the kernel, modules, and tools using `mkosi`
+4. **ISO assembly** (`./build.py iso`) — builds a UEFI-bootable ISO with GRUB via `grub-mkrescue`
+
+## Usage
+
+**Prerequisites:** Python >= 3.10, Docker, [configargparse](https://pypi.org/project/ConfigArgParse/)
 
 ```bash
+pip install -r requirements.txt
+
 # Build with defaults (amd64, kernel 6.12.69)
-./build.py
+./build.py --help
 
-# Build for ARM64
-ARCH=arm64 ./build.py
+usage: build.py [flags]
 
-# Use a local kernel source tree
-KERNEL_SRC=~/linux ./build.py
+Build CaptainOS images. Stages: kernel → tools → initramfs → iso.
 
-# Force kernel rebuild
-FORCE_KERNEL=1 ./build.py
+options:
+  -h, --help                          show this help message and exit
 
-# Force tool re-download
-FORCE_TOOLS=1 ./build.py
+build configuration:
+  --arch {amd64,arm64}                target architecture (default: amd64)
+  --builder-image IMAGE               Docker builder image name (default: captainos-builder)
+  --no-cache                          rebuild builder image without Docker cache
 
-# Rebuild builder image without cache
-NO_CACHE=1 ./build.py
+kernel:
+  --kernel-version VER                kernel version to build (default: 6.12.69)
+  --kernel-src PATH                   path to local kernel source tree
+  --kernel-mode {docker,native,skip}  kernel stage execution mode (default: docker)
+  --force-kernel                      force kernel rebuild even if outputs exist
+
+tools:
+  --tools-mode {docker,native,skip}   tools stage execution mode (default: docker)
+  --force-tools                       re-download tools even if outputs exist
+
+initramfs (mkosi):
+  --mkosi-mode {docker,native,skip}   mkosi stage execution mode (default: docker)
+  --force                             passed through to mkosi as --force
+
+iso:
+  --iso-mode {docker,native,skip}     iso stage execution mode (default: docker)
+  --force-iso                         force ISO rebuild even if outputs exist
+
+commands:
+  build          Run all build stages: kernel → tools → initramfs → iso (default)
+  kernel         Build only the kernel + modules
+  tools          Download tools (containerd, runc, nerdctl, CNI)
+  initramfs      Build only the initramfs via mkosi
+  iso            Build a UEFI-bootable ISO image
+  checksums      Compute SHA-256 checksums for specified files
+  shell          Interactive shell inside the builder container
+  clean          Remove all build artifacts
+  summary        Print mkosi configuration summary
+  qemu-test      Boot the image in QEMU for testing
+
 ```
 
 Output artifacts are placed in `out/`:
 
 - `out/initramfs-<arch>.cpio.zst` — the initramfs
 - `out/vmlinuz-<arch>` — the kernel
+- `out/captainos-<arch>.iso` — UEFI-bootable ISO image
+- `out/sha256sums-<arch>.txt` — SHA-256 checksums
 
-### Other commands
+## Build modes
 
-```bash
-./build.py shell       # Interactive shell inside the builder container
-./build.py clean       # Remove build artifacts
-./build.py summary     # Print mkosi configuration summary
-./build.py qemu-test   # Boot the image in QEMU for quick testing
-```
+Each stage can be executed in one of three modes:
 
-## Architecture
+- `docker` (default) — runs the stage inside a Docker container, providing a consistent build environment regardless of host OS.
+- `native` — runs the stage directly on the host machine. Requires all build dependencies to be installed and configured correctly.
+- `skip` — skips the stage entirely.
 
-The build has three stages, all running inside a Docker container:
+### Setting modes
 
-1. **Kernel compilation** (`captain/kernel.py`) — builds a Linux kernel from source using minimal defconfigs (`config/defconfig.{amd64,arm64}`)
-2. **Tool download** (`captain/tools.py`) — fetches pinned binary releases of the container runtime stack
-3. **mkosi image build** (`mkosi.conf`) — assembles a Debian Trixie CPIO initramfs with systemd, injecting the kernel, modules, and tools
+| Mode | CLI flag | Env var | Example |
+| --- | --- | --- | --- |
+| `docker` | `--{stage}-mode docker` | `{STAGE}_MODE=docker` | `--kernel-mode docker` |
+| `native` | `--{stage}-mode native` | `{STAGE}_MODE=native` | `--tools-mode native` |
+| `skip` | `--{stage}-mode skip` | `{STAGE}_MODE=skip` | `--iso-mode skip` |
 
 ### Included tools
 
@@ -84,21 +124,6 @@ The build has three stages, all running inside a Docker container:
 - **iptables-nft backend** — uses the nftables-backed iptables for container networking, with the necessary `CONFIG_NF_TABLES_*` kernel options enabled.
 - **IP forwarding via sysctl** — enabled at boot for container network traffic.
 
-## Kernel cmdline parameters
-
-CaptainOS reads provisioning configuration from the kernel command line:
-
-| Parameter | Description |
-| - | - |
-| `tink_worker_image` | Container image for the tink-agent (e.g. `registry.example.com/tink-agent:latest`) |
-| `docker_registry` | Registry to pull from |
-| `registry_username` | Registry auth username |
-| `registry_password` | Registry auth password |
-| `tinkerbell_tls` | Set to `false` to disable TLS for tink-agent |
-| `syslog_host` | Remote syslog host (IP or hostname) |
-| `syslog_port` | Remote syslog port (default: 514) |
-| `insecure_registries` | Comma-separated list of registries to configure as HTTP |
-
 ## Project layout
 
 ```bash
@@ -112,6 +137,7 @@ CaptainOS reads provisioning configuration from the kernel command line:
 │   ├── kernel.py               # Kernel compilation logic
 │   ├── tools.py                # Binary tool downloader
 │   ├── artifacts.py            # Artifact collection & checksums
+│   ├── iso.py                  # ISO image assembly
 │   ├── qemu.py                 # QEMU boot testing
 │   ├── log.py                  # Colored logging
 │   └── util.py                 # Shared helpers & arch mapping
@@ -135,35 +161,42 @@ CaptainOS reads provisioning configuration from the kernel command line:
 ## Testing with QEMU
 
 ```bash
-./build.py qemu-test
+./build.py qemu-test -h
 
-# Configure tink-agent via TINK_* environment variables
-TINK_WORKER_IMAGE=reg.local/tink-agent:latest TINK_DOCKER_REGISTRY=reg.local ./build.py qemu-test
+usage: build.py qemu-test [flags]
 
-# With more resources
-QEMU_MEM=4G QEMU_SMP=4 ./build.py qemu-test
+Boot the image in QEMU for testing
 
-# With extra kernel cmdline parameters
-QEMU_APPEND='custom_param=value' ./build.py qemu-test
+options:
+  -h, --help                       show this help message and exit
+
+build configuration:
+  --arch {amd64,arm64}             target architecture (default: amd64)
+  --builder-image IMAGE            Docker builder image name (default: captainos-builder)
+  --no-cache                       rebuild builder image without Docker cache
+
+qemu:
+  --qemu-append ARGS               extra kernel cmdline args for qemu-test
+  --qemu-mem SIZE                  QEMU RAM size (default: 2G)
+  --qemu-smp N                     QEMU CPU count (default: 2)
+
+tinkerbell:
+  --tink-worker-image IMAGE        tink-agent container image reference (default: ghcr.io/tinkerbell/tink-
+                                   agent:latest)
+  --tink-docker-registry HOST      registry host (triggers tink-agent services)
+  --tink-grpc-authority ADDR       tink-server gRPC endpoint (host:port)
+  --tink-worker-id ID              machine / worker ID
+  --tink-tls BOOL                  enable TLS to tink-server (default: false)
+  --tink-insecure-tls BOOL         allow insecure TLS (default: true)
+  --tink-insecure-registries LIST  comma-separated insecure registries
+  --tink-registry-username USER    registry auth username
+  --tink-registry-password PASS    registry auth password
+  --tink-syslog-host HOST          remote syslog host
+  --tink-facility CODE             facility code
+  --ipam PARAM                     static networking IPAM parameter
 ```
 
-Tinkerbell parameters are configured via `TINK_*` environment variables, which are automatically mapped to kernel cmdline keys:
-
-| Environment variable | Kernel cmdline key | Default |
-| --- | --- | --- |
-| `TINK_WORKER_IMAGE` | `tink_worker_image` | `ghcr.io/tinkerbell/tink-agent:latest` |
-| `TINK_DOCKER_REGISTRY` | `docker_registry` | |
-| `TINK_GRPC_AUTHORITY` | `grpc_authority` | |
-| `TINK_WORKER_ID` | `worker_id` | |
-| `TINK_TLS` | `tinkerbell_tls` | `false` |
-| `TINK_INSECURE_TLS` | `tinkerbell_insecure_tls` | `true` |
-| `TINK_INSECURE_REGISTRIES` | `insecure_registries` | |
-| `TINK_REGISTRY_USERNAME` | `registry_username` | |
-| `TINK_REGISTRY_PASSWORD` | `registry_password` | |
-| `TINK_SYSLOG_HOST` | `syslog_host` | |
-| `TINK_FACILITY` | `facility` | |
-
-This boots the image in QEMU with a virtio NIC and serial console. `console=ttyS0 audit=0` is always appended. Press `Ctrl-A X` to exit.
+This boots the image in QEMU with a virtio NIC and serial console. `console=ttyS0 audit=0` is always appended to the kernel cmdline. Press `Ctrl-A X` to exit or run `poweroff` inside the VM.
 
 ## License
 
