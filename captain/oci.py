@@ -1,7 +1,7 @@
 """High-level OCI artifact operations for publishing and retrieving releases.
 
-Each artifact file is stored as its own tar layer in a proper OCI image
-so that:
+Artifact files are bundled into a single tar layer and pushed as a valid
+OCI image so that:
 
 * **containerd** can pull it (valid ``rootfs.diff_ids`` in the config) —
   Kubernetes image-volume mounts work.
@@ -105,48 +105,27 @@ def publish(
             _log.err(f"Missing artifact: {f}")
             raise SystemExit(1)
 
-    # Build a multi-layer OCI image — one layer per artifact file.
-    # Each layer is a tar containing a single file at the root,
-    # so the image filesystem exposes individual files.  crane computes
-    # rootfs.diff_ids automatically, keeping containerd happy.
-    #
-    # Layers are appended to a temporary ref so that a partial failure
-    # never leaves the final tag pointing at an incomplete image.
+    # Bundle all artifact files into a single tar layer and push
+    # directly to the final ref.  crane computes rootfs.diff_ids
+    # automatically, keeping containerd happy.
     ref = _image_ref(registry, repository, artifact_name, f"{tag}-{arch}")
-    wip_ref = f"{ref}-wip"
-    layer_tars: list[Path] = []
+    layer_tar = out / ".layer-artifacts.tar"
     try:
-        for i, f in enumerate(push_files):
-            layer_tar = out / f".layer-{f.name}.tar"
-            layer_tars.append(layer_tar)
-            with tarfile.open(layer_tar, "w") as tf:
+        with tarfile.open(layer_tar, "w") as tf:
+            for f in push_files:
                 tf.add(f, arcname=f.name)
-            crane.append(
-                layer_tar,
-                wip_ref,
-                base=wip_ref if i > 0 else None,
-                logger=_log,
-            )
-        # All layers succeeded — set metadata and promote to the final tag.
+        crane.append(layer_tar, ref, logger=_log)
         crane.mutate(
-            wip_ref,
+            ref,
             platform=f"linux/{arch}",
             annotations={
                 "org.opencontainers.image.source": f"https://github.com/{repository}",
                 "org.opencontainers.image.revision": sha,
             },
-            tag=ref,
             logger=_log,
         )
     finally:
-        # Best-effort cleanup of the temporary WIP tag (both on success
-        # and failure) so partial builds don't accumulate in the registry.
-        try:
-            crane.delete(wip_ref, logger=_log)
-        except subprocess.CalledProcessError:
-            _log.log(f"Warning: could not delete temporary tag {wip_ref}")
-        for t in layer_tars:
-            t.unlink(missing_ok=True)
+        layer_tar.unlink(missing_ok=True)
 
     _log.log(f"Published {arch} artifacts → {ref}")
 

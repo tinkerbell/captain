@@ -1,6 +1,6 @@
 """Thin wrapper around the ``crane`` CLI for OCI image operations.
 
-Each artifact file is pushed as its own tar layer via ``crane append``,
+Artifact files are bundled into a tar and pushed via ``crane append``,
 producing a valid OCI image with correct ``rootfs.diff_ids`` in the
 config.  This means:
 
@@ -135,10 +135,3 @@ def tag(src_ref: str, new_tag: str, *, logger: StageLogger | None = None) -> Non
     _log = logger or _default_log
     _log.log(f"crane tag {src_ref} {new_tag}")
     run(["crane", "tag", src_ref, new_tag])
-
-
-def delete(image_ref: str, *, logger: StageLogger | None = None) -> None:
-    """Delete *image_ref* from the registry."""
-    _log = logger or _default_log
-    _log.log(f"crane delete {image_ref}")
-    run(["crane", "delete", image_ref])
