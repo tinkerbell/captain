@@ -76,23 +76,41 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Load shared config
+        run: cat .github/config.env >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compute Dockerfile hash
         id: dockerfile-hash
         run: echo "hash=$(sha256sum Dockerfile | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
-      - name: Build Docker builder image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          load: true
-          tags: |
-            captainos-builder
-            captainos-builder:${{ steps.dockerfile-hash.outputs.hash }}
-          cache-from: type=gha,scope=builder-${{ matrix.arch }}
-          cache-to: ${{ github.ref == 'refs/heads/main' && format('type=gha,scope=builder-{0},mode=max', matrix.arch) || '' }}
+      - name: Pull or build builder image
+        id: builder
+        run: |
+          HASH="${{ steps.dockerfile-hash.outputs.hash }}"
+          REMOTE="ghcr.io/${{ github.repository }}/${{ env.BUILDER_IMAGE }}"
+          if docker pull "${REMOTE}:${HASH}-${{ matrix.arch }}"; then
+            docker tag "${REMOTE}:${HASH}-${{ matrix.arch }}" "${{ env.BUILDER_IMAGE }}:${HASH}"
+            docker tag "${REMOTE}:${HASH}-${{ matrix.arch }}" "${{ env.BUILDER_IMAGE }}"
+            echo "built=false" >> "$GITHUB_OUTPUT"
+          else
+            docker build -t "${{ env.BUILDER_IMAGE }}:${HASH}" -t "${{ env.BUILDER_IMAGE }}" .
+            echo "built=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push builder image to GHCR
+        if: github.ref == 'refs/heads/main' && steps.builder.outputs.built == 'true'
+        run: |
+          HASH="${{ steps.dockerfile-hash.outputs.hash }}"
+          REMOTE="ghcr.io/${{ github.repository }}/${{ env.BUILDER_IMAGE }}"
+          docker tag "${{ env.BUILDER_IMAGE }}:${HASH}" "${REMOTE}:${HASH}-${{ matrix.arch }}"
+          docker push "${REMOTE}:${HASH}-${{ matrix.arch }}"
 
       - name: Restore kernel cache
         id: kernel-cache
@@ -253,23 +271,41 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Load shared config
+        run: cat .github/config.env >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compute Dockerfile hash
         id: dockerfile-hash
         run: echo "hash=$(sha256sum Dockerfile | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
-      - name: Build Docker builder image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          load: true
-          tags: |
-            captainos-builder
-            captainos-builder:${{ steps.dockerfile-hash.outputs.hash }}
-          cache-from: type=gha,scope=builder-${{ matrix.arch }}
-          cache-to: ${{ github.ref == 'refs/heads/main' && format('type=gha,scope=builder-{0},mode=max', matrix.arch) || '' }}
+      - name: Pull or build builder image
+        id: builder
+        run: |
+          HASH="${{ steps.dockerfile-hash.outputs.hash }}"
+          REMOTE="ghcr.io/${{ github.repository }}/${{ env.BUILDER_IMAGE }}"
+          if docker pull "${REMOTE}:${HASH}-${{ matrix.arch }}"; then
+            docker tag "${REMOTE}:${HASH}-${{ matrix.arch }}" "${{ env.BUILDER_IMAGE }}:${HASH}"
+            docker tag "${REMOTE}:${HASH}-${{ matrix.arch }}" "${{ env.BUILDER_IMAGE }}"
+            echo "built=false" >> "$GITHUB_OUTPUT"
+          else
+            docker build -t "${{ env.BUILDER_IMAGE }}:${HASH}" -t "${{ env.BUILDER_IMAGE }}" .
+            echo "built=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push builder image to GHCR
+        if: github.ref == 'refs/heads/main' && steps.builder.outputs.built == 'true'
+        run: |
+          HASH="${{ steps.dockerfile-hash.outputs.hash }}"
+          REMOTE="ghcr.io/${{ github.repository }}/${{ env.BUILDER_IMAGE }}"
+          docker tag "${{ env.BUILDER_IMAGE }}:${HASH}" "${REMOTE}:${HASH}-${{ matrix.arch }}"
+          docker push "${REMOTE}:${HASH}-${{ matrix.arch }}"
 
       - name: Download kernel artifacts
         uses: actions/download-artifact@v4
@@ -375,6 +411,7 @@ jobs:
         working-directory: out
         run: |
           oras push \
+            --platform linux/${{ matrix.arch }} \
             ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.short-sha.outputs.sha }}-${{ matrix.arch }} \
             --annotation org.opencontainers.image.source=https://github.com/${{ github.repository }} \
             --annotation org.opencontainers.image.revision=${{ github.sha }} \
@@ -382,3 +419,40 @@ jobs:
             initramfs-${{ matrix.arch }}.cpio.zst \
             captainos-${{ matrix.arch }}.iso \
             sha256sums-${{ matrix.arch }}.txt
+
+  # -------------------------------------------------------------------
+  # Create multi-arch OCI index from per-arch artifact manifests
+  # -------------------------------------------------------------------
+  create-artifact-index:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: [publish-artifacts]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Load shared config
+        run: cat .github/config.env >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install ORAS
+        uses: oras-project/setup-oras@v1
+
+      - name: Compute short SHA
+        id: short-sha
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Create multi-arch artifact index
+        run: |
+          REPO="ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}"
+          SHA="${{ steps.short-sha.outputs.sha }}"
+          oras manifest index create \
+            "${REPO}:${SHA}" \
+            "${REPO}:${SHA}-amd64" \
+            "${REPO}:${SHA}-arm64"
