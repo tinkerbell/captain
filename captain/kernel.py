@@ -12,7 +12,6 @@ import os
 import re
 import shutil
 import tarfile
-import tempfile
 import urllib.request
 from pathlib import Path
 

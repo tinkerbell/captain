@@ -1,0 +1,42 @@
+# Lightweight container for OCI release operations (publish, index, pull, tag).
+# Contains crane, Python 3, git, and configargparse — nothing else.
+#
+# Usage:
+#   docker build -f Dockerfile.release -t captainos-release .
+#   docker run --rm -v $(pwd):/work captainos-release release publish
+FROM python:3.12-slim
+
+ARG CRANE_VERSION=v0.20.3
+
+# Install git (needed for version tag computation) and tar (for crane export)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    ca-certificates \
+    curl \
+    tar \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install crane (with checksum verification)
+RUN DPKG_ARCH="$(dpkg --print-architecture)" \
+    && case "$DPKG_ARCH" in \
+         amd64) CRANE_ARCH="x86_64" ;; \
+         arm64) CRANE_ARCH="arm64" ;; \
+         *) echo "Unsupported arch: $DPKG_ARCH" >&2; exit 1 ;; \
+       esac \
+    && CRANE_TARBALL="go-containerregistry_Linux_${CRANE_ARCH}.tar.gz" \
+    && CRANE_BASE_URL="https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}" \
+    && curl -fsSL "${CRANE_BASE_URL}/${CRANE_TARBALL}" -o /tmp/crane.tar.gz \
+    && curl -fsSL "${CRANE_BASE_URL}/checksums.txt" -o /tmp/checksums.txt \
+    && grep " ${CRANE_TARBALL}$" /tmp/checksums.txt | (cd /tmp && sha256sum -c -) \
+    && tar -xz -f /tmp/crane.tar.gz -C /usr/local/bin crane \
+    && chmod +x /usr/local/bin/crane \
+    && rm -f /tmp/crane.tar.gz /tmp/checksums.txt \
+    && crane version
+
+# Install Python dependencies
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
+
+WORKDIR /work
+ENTRYPOINT ["python3", "/work/build.py"]
+CMD ["release", "--help"]

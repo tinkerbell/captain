@@ -110,12 +110,15 @@ def build(cfg: Config) -> None:
         _log.err("grub-mkrescue not found. Install grub-common or use ISO_MODE=docker.")
         raise SystemExit(1)
 
-    run([
-        grub_mkrescue,
-        f"--directory=/usr/lib/grub/{grub_platform}",
-        "-o", str(iso_path),
-        str(staging),
-    ])
+    run(
+        [
+            grub_mkrescue,
+            f"--directory=/usr/lib/grub/{grub_platform}",
+            "-o",
+            str(iso_path),
+            str(staging),
+        ]
+    )
 
     size_mb = iso_path.stat().st_size / (1024 * 1024)
     _log.log(f"ISO created: {iso_path} ({size_mb:.1f}M)")

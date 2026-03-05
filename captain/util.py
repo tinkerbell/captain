@@ -150,14 +150,24 @@ def check_mkosi_dependencies() -> list[str]:
 
     Returns a list of missing command names (empty if all found).
     """
-    return _missing([
-        "mkosi",
-        "zstd",
-        "cpio",
-        "bwrap",       # bubblewrap — used by mkosi
-        "mksquashfs",  # squashfs-tools — used by mkosi
-        "kmod",
-    ])
+    return _missing(
+        [
+            "mkosi",
+            "zstd",
+            "cpio",
+            "bwrap",  # bubblewrap — used by mkosi
+            "mksquashfs",  # squashfs-tools — used by mkosi
+            "kmod",
+        ]
+    )
+
+
+def check_release_dependencies() -> list[str]:
+    """Check host tools required for a native release operation.
+
+    Returns a list of missing command names (empty if all found).
+    """
+    return _missing(["crane", "git", "tar"])
 
 
 def check_dependencies(arch: str) -> list[str]:

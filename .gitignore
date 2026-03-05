@@ -20,3 +20,12 @@ Thumbs.db
 # Python
 __pycache__/
 *.pyc
+*.egg-info/
+dist/
+*.egg
+
+# Tool caches
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.pytest_cache/

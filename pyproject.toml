@@ -1,0 +1,27 @@
+[project]
+name = "captain"
+requires-python = ">=3.10"
+dependencies = ["configargparse>=1.7"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "SIM", # simplify
+    "RUF", # ruff-specific
+]
+
+[tool.ruff.lint.per-file-ignores]
+"captain/iso.py" = ["E501"]  # embedded grub config has long data lines
+
+[tool.pyright]
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
+exclude = ["mkosi.tools", "mkosi.output", "__pycache__"]

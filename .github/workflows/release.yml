@@ -24,30 +24,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install ORAS
-        uses: oras-project/setup-oras@v1
+      - name: Install crane
+        uses: imjasonh/setup-crane@v0.4
 
       - name: Load shared config
         run: cat .github/config.env >> "$GITHUB_ENV"
 
-      - name: Compute version tag
-        id: version-tag
-        run: |
-          VERSION=$(git describe --tags --first-parent --abbrev=0 --match 'v[0-9]*' --exclude='${{ github.ref_name }}' 2>/dev/null || echo "v0.0.0")
-          SHA=${GITHUB_SHA::7}
-          echo "tag=${VERSION}-${SHA}" >> "$GITHUB_OUTPUT"
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
 
       - name: Pull release artifacts (amd64)
-        run: |
-          oras pull --platform linux/amd64 \
-            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.version-tag.outputs.tag }} \
-            -o artifacts/amd64/
+        env:
+          ARCH: amd64
+          VERSION_EXCLUDE: ${{ github.ref_name }}
+        run: ./build.py release pull --pull-output artifacts/amd64
 
       - name: Pull release artifacts (arm64)
-        run: |
-          oras pull --platform linux/arm64 \
-            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.version-tag.outputs.tag }} \
-            -o artifacts/arm64/
+        env:
+          ARCH: arm64
+          VERSION_EXCLUDE: ${{ github.ref_name }}
+        run: ./build.py release pull --pull-output artifacts/arm64
 
       - name: Create GitHub Release
         env:
@@ -60,7 +56,6 @@ jobs:
             --title "${{ github.ref_name }}"
 
       - name: Tag OCI artifact index with version
-        run: |
-          oras tag \
-            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.version-tag.outputs.tag }} \
-            ${{ github.ref_name }}
+        env:
+          VERSION_EXCLUDE: ${{ github.ref_name }}
+        run: ./build.py release tag ${{ github.ref_name }}

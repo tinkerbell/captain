@@ -16,17 +16,17 @@ _log = for_stage("qemu")
 # Insertion order is preserved.
 _TINK_PARAMS: list[tuple[str, str]] = [
     # (namespace_attr,              cmdline_key)
-    ("tink_worker_image",           "tink_worker_image"),
-    ("tink_docker_registry",        "docker_registry"),
-    ("tink_grpc_authority",         "grpc_authority"),
-    ("tink_worker_id",              "worker_id"),
-    ("tink_tls",                    "tinkerbell_tls"),
-    ("tink_insecure_tls",           "tinkerbell_insecure_tls"),
-    ("tink_insecure_registries",    "insecure_registries"),
-    ("tink_registry_username",      "registry_username"),
-    ("tink_registry_password",      "registry_password"),
-    ("tink_syslog_host",            "syslog_host"),
-    ("tink_facility",               "facility"),
+    ("tink_worker_image", "tink_worker_image"),
+    ("tink_docker_registry", "docker_registry"),
+    ("tink_grpc_authority", "grpc_authority"),
+    ("tink_worker_id", "worker_id"),
+    ("tink_tls", "tinkerbell_tls"),
+    ("tink_insecure_tls", "tinkerbell_insecure_tls"),
+    ("tink_insecure_registries", "insecure_registries"),
+    ("tink_registry_username", "registry_username"),
+    ("tink_registry_password", "registry_password"),
+    ("tink_syslog_host", "syslog_host"),
+    ("tink_facility", "facility"),
 ]
 
 

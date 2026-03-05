@@ -6,7 +6,7 @@ Requires: Python >= 3.10, Docker (unless all stages use native or skip)
 
 import sys
 
-if sys.version_info < (3, 10):
+if sys.version_info < (3, 10):  # noqa: UP036
     print("ERROR: Python >= 3.10 is required.", file=sys.stderr)
     sys.exit(1)
 
