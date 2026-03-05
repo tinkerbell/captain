@@ -372,12 +372,13 @@ jobs:
 
       - name: Push artifacts to GHCR
         if: github.ref == 'refs/heads/main'
+        working-directory: out
         run: |
           oras push \
             ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.short-sha.outputs.sha }}-${{ matrix.arch }} \
             --annotation org.opencontainers.image.source=https://github.com/${{ github.repository }} \
             --annotation org.opencontainers.image.revision=${{ github.sha }} \
-            out/vmlinuz-${{ matrix.arch }} \
-            out/initramfs-${{ matrix.arch }}.cpio.zst \
-            out/captainos-${{ matrix.arch }}.iso \
-            out/sha256sums-${{ matrix.arch }}.txt
+            vmlinuz-${{ matrix.arch }} \
+            initramfs-${{ matrix.arch }}.cpio.zst \
+            captainos-${{ matrix.arch }}.iso \
+            sha256sums-${{ matrix.arch }}.txt
