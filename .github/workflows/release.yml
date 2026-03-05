@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -28,20 +30,23 @@ jobs:
       - name: Load shared config
         run: cat .github/config.env >> "$GITHUB_ENV"
 
-      - name: Compute short SHA
-        id: short-sha
-        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Compute version tag
+        id: version-tag
+        run: |
+          VERSION=$(git describe --tags --first-parent --abbrev=0 --match 'v[0-9]*' --exclude='${{ github.ref_name }}' 2>/dev/null || echo "v0.0.0")
+          SHA=${GITHUB_SHA::7}
+          echo "tag=${VERSION}-${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Pull release artifacts (amd64)
         run: |
           oras pull --platform linux/amd64 \
-            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.short-sha.outputs.sha }} \
+            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.version-tag.outputs.tag }} \
             -o artifacts/amd64/
 
       - name: Pull release artifacts (arm64)
         run: |
           oras pull --platform linux/arm64 \
-            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.short-sha.outputs.sha }} \
+            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.version-tag.outputs.tag }} \
             -o artifacts/arm64/
 
       - name: Create GitHub Release
@@ -57,5 +62,5 @@ jobs:
       - name: Tag OCI artifact index with version
         run: |
           oras tag \
-            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.short-sha.outputs.sha }} \
+            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.version-tag.outputs.tag }} \
             ${{ github.ref_name }}

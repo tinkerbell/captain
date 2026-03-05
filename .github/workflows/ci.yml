@@ -352,6 +352,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Load shared config
         run: cat .github/config.env >> "$GITHUB_ENV"
@@ -402,9 +404,12 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: oras-project/setup-oras@v1
 
-      - name: Compute short SHA
-        id: short-sha
-        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Compute version tag
+        id: version-tag
+        run: |
+          VERSION=$(git describe --tags --first-parent --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo "v0.0.0")
+          SHA=${GITHUB_SHA::7}
+          echo "tag=${VERSION}-${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Push artifacts to GHCR
         if: github.ref == 'refs/heads/main'
@@ -412,7 +417,7 @@ jobs:
         run: |
           oras push \
             --artifact-platform linux/${{ matrix.arch }} \
-            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.short-sha.outputs.sha }}-${{ matrix.arch }} \
+            ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}:${{ steps.version-tag.outputs.tag }}-${{ matrix.arch }} \
             --annotation org.opencontainers.image.source=https://github.com/${{ github.repository }} \
             --annotation org.opencontainers.image.revision=${{ github.sha }} \
             vmlinuz-${{ matrix.arch }} \
@@ -430,6 +435,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Load shared config
         run: cat .github/config.env >> "$GITHUB_ENV"
@@ -444,15 +451,18 @@ jobs:
       - name: Install ORAS
         uses: oras-project/setup-oras@v1
 
-      - name: Compute short SHA
-        id: short-sha
-        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Compute version tag
+        id: version-tag
+        run: |
+          VERSION=$(git describe --tags --first-parent --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo "v0.0.0")
+          SHA=${GITHUB_SHA::7}
+          echo "tag=${VERSION}-${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Create multi-arch artifact index
         run: |
           REPO="ghcr.io/${{ github.repository }}/${{ env.OCI_ARTIFACT_NAME }}"
-          SHA="${{ steps.short-sha.outputs.sha }}"
+          TAG="${{ steps.version-tag.outputs.tag }}"
           oras manifest index create \
-            "${REPO}:${SHA}" \
-            "${REPO}:${SHA}-amd64" \
-            "${REPO}:${SHA}-arm64"
+            "${REPO}:${TAG}" \
+            "${REPO}:${TAG}-amd64" \
+            "${REPO}:${TAG}-arm64"
