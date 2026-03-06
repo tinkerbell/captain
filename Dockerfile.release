@@ -6,7 +6,7 @@
 #   docker run --rm -v $(pwd):/work captainos-release release publish
 FROM python:3.12-slim
 
-ARG CRANE_VERSION=v0.20.3
+ARG CRANE_VERSION=v0.21.2
 
 # Install git (needed for version tag computation) and tar (for crane export)
 RUN apt-get update && apt-get install -y --no-install-recommends \

@@ -12,6 +12,7 @@ config.  This means:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tarfile
@@ -48,16 +49,24 @@ def mutate(
     *,
     platform: str | None = None,
     annotations: dict[str, str] | None = None,
+    labels: dict[str, str] | None = None,
     tag: str | None = None,
     logger: StageLogger | None = None,
 ) -> None:
-    """Mutate metadata on *image_ref* (platform, annotations, re-tag)."""
+    """Mutate metadata on *image_ref* (platform, annotations, labels, re-tag).
+
+    *annotations* are written to the OCI manifest (visible via
+    ``crane manifest``).  *labels* are written to the image config
+    (visible via ``docker inspect``).
+    """
     _log = logger or _default_log
     cmd: list[str] = ["crane", "mutate", image_ref]
     if platform:
         cmd += ["--set-platform", platform]
     for key, value in (annotations or {}).items():
         cmd += ["-a", f"{key}={value}"]
+    for key, value in (labels or {}).items():
+        cmd += ["-l", f"{key}={value}"]
     if tag:
         cmd += ["-t", tag]
     _log.log(f"crane mutate {image_ref}")
@@ -143,3 +152,33 @@ def tag(src_ref: str, new_tag: str, *, logger: StageLogger | None = None) -> Non
     _log = logger or _default_log
     _log.log(f"crane tag {src_ref} {new_tag}")
     run(["crane", "tag", src_ref, new_tag])
+
+
+def set_created(
+    image_ref: str,
+    created: str,
+    *,
+    logger: StageLogger | None = None,
+) -> None:
+    """Set the ``created`` timestamp in the image config of *image_ref*.
+
+    Uses ``crane config`` to read the config JSON, patches the
+    ``created`` field, and pipes it back through ``crane edit config``.
+    This sets the top-level config timestamp that ``docker images``
+    displays in the CREATED column.
+    """
+    _log = logger or _default_log
+    _log.log(f"crane set-created {image_ref}")
+    cfg_result = run(["crane", "config", image_ref], capture=True)
+    config = json.loads(cfg_result.stdout)
+    config["created"] = created
+    edit_proc = subprocess.Popen(
+        ["crane", "edit", "config", image_ref],
+        stdin=subprocess.PIPE,
+    )
+    edit_proc.communicate(input=json.dumps(config).encode())
+    if edit_proc.returncode != 0:
+        raise subprocess.CalledProcessError(
+            edit_proc.returncode,
+            ["crane", "edit", "config", image_ref],
+        )
