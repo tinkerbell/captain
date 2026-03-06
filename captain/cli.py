@@ -77,7 +77,7 @@ COMMANDS: dict[str, str] = {
     "initramfs": "Build only the initramfs via mkosi",
     "iso": "Build a UEFI-bootable ISO image",
     "checksums": "Compute SHA-256 checksums for specified files",
-    "release": "OCI artifact operations (publish, index, pull, tag)",
+    "release": "OCI artifact operations (publish, pull, tag)",
     "shell": "Interactive shell inside the builder container",
     "clean": "Remove all build artifacts",
     "summary": "Print mkosi configuration summary",
@@ -150,12 +150,11 @@ commands:
 {commands_list}
 """
     elif command == "release":
-        desc = "OCI release workflow: build (or pull) → publish → index → tag"
+        desc = "OCI release workflow: pull (or build) → publish → tag"
         release_cmds = {
-            "publish": "Push per-arch artifacts to OCI registry",
-            "index": "Create multi-arch OCI index from per-arch manifests",
-            "pull": "Pull and extract artifacts for one architecture",
-            "tag": "Tag an existing OCI artifact index with a version",
+            "publish": "Publish artifacts as a multi-arch OCI image",
+            "pull": "Pull and extract artifacts (amd64, arm64, or both)",
+            "tag": "Tag all artifact images with a version",
         }
         commands_list = "\n".join(f"  {name:14s} {d}" for name, d in release_cmds.items())
         epilog = f"""\
@@ -356,6 +355,7 @@ def _add_checksums_flags(parser: configargparse.ArgParser) -> None:
 def _add_release_flags(parser: configargparse.ArgParser) -> None:
     """--release-mode and OCI registry flags for the release command."""
     _add_release_base_flags(parser)
+    _add_release_target_flag(parser)
     _add_release_pull_output(parser)
 
 
@@ -367,6 +367,7 @@ def _add_release_base_flags(parser: configargparse.ArgParser) -> None:
         env_var="RELEASE_MODE",
         default="native",
         choices=list(VALID_MODES),
+        metavar="MODE",
         help="release stage execution mode",
     )
 
@@ -391,6 +392,18 @@ def _add_release_base_flags(parser: configargparse.ArgParser) -> None:
         metavar="NAME",
         default="artifacts",
         help="OCI artifact image name",
+    )
+
+
+def _add_release_target_flag(parser: configargparse.ArgParser) -> None:
+    """--target flag for publish and pull (not tag)."""
+    g = parser.add_argument_group("target")
+    g.add_argument(
+        "--target",
+        env_var="TARGET",
+        default=None,
+        choices=["amd64", "arm64", "both"],
+        help="artifact target (amd64, arm64, or both; default: --arch value)",
     )
     g.add_argument(
         "--git-sha",
@@ -957,23 +970,24 @@ def _cmd_checksums(cfg: Config, _extra_args: list[str], args: object = None) -> 
     clog.log("Checksums complete!")
 
 
-_RELEASE_SUBCOMMANDS = ("publish", "index", "pull", "tag")
+_RELEASE_SUBCOMMANDS = ("publish", "pull", "tag")
 
 _RELEASE_SUBCMD_INFO: dict[str, tuple[str, list]] = {
     "publish": (
-        "Push per-arch artifacts to OCI registry",
-        [_add_common_flags, _add_release_base_flags],
-    ),
-    "index": (
-        "Create multi-arch OCI index from per-arch manifests",
-        [_add_common_flags, _add_release_base_flags],
+        "Publish artifacts as a multi-arch OCI image",
+        [_add_common_flags, _add_release_base_flags, _add_release_target_flag],
     ),
     "pull": (
-        "Pull and extract artifacts for one architecture",
-        [_add_common_flags, _add_release_base_flags, _add_release_pull_output],
+        "Pull and extract artifacts (amd64, arm64, or both)",
+        [
+            _add_common_flags,
+            _add_release_base_flags,
+            _add_release_target_flag,
+            _add_release_pull_output,
+        ],
     ),
     "tag": (
-        "Tag an existing OCI artifact index with a version",
+        "Tag all artifact images with a version",
         [_add_common_flags, _add_release_base_flags, _add_release_tag_version],
     ),
 }
@@ -1016,7 +1030,7 @@ def _resolve_git_sha(args: object, project_dir: Path) -> str:
 
 
 def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> None:
-    """OCI artifact operations: publish, index, pull, tag."""
+    """OCI artifact operations: publish, pull, tag."""
     rlog = for_stage("release")
 
     # Peel the release subcommand from extra_args.
@@ -1075,6 +1089,9 @@ def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> Non
         exclude = getattr(args, "version_exclude", None)
         if exclude:
             env_args += ["-e", f"VERSION_EXCLUDE={exclude}"]
+        if sub in ("publish", "pull"):
+            target = getattr(args, "target", None) or cfg.arch
+            env_args += ["-e", f"TARGET={target}"]
         pull_output = getattr(args, "pull_output", None)
 
         # Build the inner command.
@@ -1117,8 +1134,10 @@ def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> Non
     tag = oci.compute_version_tag(cfg.project_dir, sha, exclude=exclude)
 
     if sub == "publish":
+        target = getattr(args, "target", None) or cfg.arch
         oci.publish(
             cfg,
+            target=target,
             registry=registry,
             repository=repository,
             artifact_name=artifact_name,
@@ -1127,16 +1146,8 @@ def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> Non
             logger=rlog,
         )
 
-    elif sub == "index":
-        oci.create_index(
-            registry=registry,
-            repository=repository,
-            artifact_name=artifact_name,
-            tag=tag,
-            logger=rlog,
-        )
-
     elif sub == "pull":
+        target = getattr(args, "target", None) or cfg.arch
         pull_output = getattr(args, "pull_output", None)
         if pull_output is None:
             rlog.err("--pull-output is required for 'release pull'.")
@@ -1146,14 +1157,14 @@ def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> Non
             repository=repository,
             artifact_name=artifact_name,
             tag=tag,
-            arch=cfg.arch,
+            target=target,
             output_dir=Path(pull_output),
             logger=rlog,
         )
 
     elif sub == "tag":
         version = rest[0]
-        oci.tag_image(
+        oci.tag_all(
             registry=registry,
             repository=repository,
             artifact_name=artifact_name,

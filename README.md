@@ -92,6 +92,52 @@ Output artifacts are placed in `out/`:
 - `out/captainos-<arch>.iso` — UEFI-bootable ISO image
 - `out/sha256sums-<arch>.txt` — SHA-256 checksums
 
+## Release
+
+CI publishes build artifacts as OCI images on every push to `main`. Pushing a version tag (`v*`) creates a GitHub Release with downloadable files and tags the OCI images with the release version.
+
+### OCI artifact images
+
+Three multi-arch OCI indexes are published per build:
+
+| Image | Tag | Contents |
+| --- | --- | --- |
+| amd64-only | `vX.Y.Z-<sha7>-amd64` | vmlinuz, initramfs, ISO, checksums (amd64) |
+| arm64-only | `vX.Y.Z-<sha7>-arm64` | vmlinuz, initramfs, ISO, checksums (arm64) |
+| combined | `vX.Y.Z-<sha7>` | all artifacts from both architectures |
+
+Each artifact file is pushed as its own OCI layer. Deterministic tar creation (zeroed metadata) ensures identical layer digests across per-arch and combined images, so registries deduplicate shared blobs — the combined image adds zero additional storage.
+
+All three images are multi-arch OCI indexes with `linux/amd64` and `linux/arm64` platform entries pointing to the same content, so any platform can pull them. Images are compatible with:
+
+- **containerd** — valid `rootfs.diff_ids` in the config; Kubernetes image-volume mounts work
+- **crane export** — extracts individual artifact files for release workflows
+
+### GitHub Release
+
+When a `v*` tag is pushed, the release workflow:
+
+1. Pulls the combined OCI image (both architectures)
+2. Attaches all artifacts as downloadable files on the GitHub Release page:
+   - `vmlinuz-amd64`, `initramfs-amd64.cpio.zst`, `captainos-amd64.iso`, `sha256sums-amd64.txt`
+   - `vmlinuz-arm64`, `initramfs-arm64.cpio.zst`, `captainos-arm64.iso`, `sha256sums-arm64.txt`
+3. Tags all three OCI images with the clean release version (`vX.Y.Z`, `vX.Y.Z-amd64`, `vX.Y.Z-arm64`)
+
+### Release subcommands
+
+```bash
+# Publish artifacts as a multi-arch OCI image
+./build.py release publish --target amd64
+
+# Pull and extract artifacts
+./build.py release pull --target both --pull-output ./out/release/
+
+# Tag all artifact images with a release version
+./build.py release tag v1.0.0
+```
+
+Run `./build.py release <subcommand> -h` for full flag reference.
+
 ## Build modes
 
 Each stage can be executed in one of three modes:
@@ -137,11 +183,14 @@ Each stage can be executed in one of three modes:
 │   ├── kernel.py               # Kernel compilation logic
 │   ├── tools.py                # Binary tool downloader
 │   ├── artifacts.py            # Artifact collection & checksums
+│   ├── oci.py                  # OCI artifact publish/pull/tag
+│   ├── crane.py                # crane CLI wrapper
 │   ├── iso.py                  # ISO image assembly
 │   ├── qemu.py                 # QEMU boot testing
 │   ├── log.py                  # Colored logging
 │   └── util.py                 # Shared helpers & arch mapping
 ├── Dockerfile                  # Builder container definition
+├── Dockerfile.release          # Lightweight container for OCI release ops
 ├── mkosi.conf                  # mkosi image configuration
 ├── mkosi.postinst              # Post-install hooks (symlinks, cleanup)
 ├── mkosi.finalize              # Final image adjustments

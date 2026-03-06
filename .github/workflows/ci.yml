@@ -364,14 +364,15 @@ jobs:
   # -------------------------------------------------------------------
   publish-artifacts:
     if: github.ref == 'refs/heads/main'
-    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    runs-on: ${{ matrix.target == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     needs: [build-iso]
     strategy:
       fail-fast: false
       matrix:
-        arch: [amd64, arm64]
+        target: [amd64, arm64, both]
     env:
-      ARCH: ${{ matrix.arch }}
+      ARCH: ${{ matrix.target == 'both' && 'amd64' || matrix.target }}
+      TARGET: ${{ matrix.target }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -381,22 +382,46 @@ jobs:
       - name: Load shared config
         run: cat .github/config.env >> "$GITHUB_ENV"
 
-      - name: Download kernel artifacts
+      - name: Download kernel artifacts (amd64)
+        if: matrix.target == 'amd64' || matrix.target == 'both'
         uses: actions/download-artifact@v4
         with:
-          name: kernel-${{ matrix.arch }}
+          name: kernel-amd64
           path: mkosi.output
 
-      - name: Download initramfs artifacts
+      - name: Download initramfs artifacts (amd64)
+        if: matrix.target == 'amd64' || matrix.target == 'both'
         uses: actions/download-artifact@v4
         with:
-          name: initramfs-${{ matrix.arch }}
+          name: initramfs-amd64
           path: out
 
-      - name: Download ISO artifact
+      - name: Download ISO artifact (amd64)
+        if: matrix.target == 'amd64' || matrix.target == 'both'
         uses: actions/download-artifact@v4
         with:
-          name: iso-${{ matrix.arch }}
+          name: iso-amd64
+          path: out
+
+      - name: Download kernel artifacts (arm64)
+        if: matrix.target == 'arm64' || matrix.target == 'both'
+        uses: actions/download-artifact@v4
+        with:
+          name: kernel-arm64
+          path: mkosi.output
+
+      - name: Download initramfs artifacts (arm64)
+        if: matrix.target == 'arm64' || matrix.target == 'both'
+        uses: actions/download-artifact@v4
+        with:
+          name: initramfs-arm64
+          path: out
+
+      - name: Download ISO artifact (arm64)
+        if: matrix.target == 'arm64' || matrix.target == 'both'
+        uses: actions/download-artifact@v4
+        with:
+          name: iso-arm64
           path: out
 
       - name: Install Python dependencies
@@ -414,35 +439,3 @@ jobs:
 
       - name: Publish artifacts to GHCR
         run: ./build.py release publish
-
-  # -------------------------------------------------------------------
-  # Create multi-arch OCI index from per-arch artifact manifests
-  # -------------------------------------------------------------------
-  create-artifact-index:
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    needs: [publish-artifacts]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Load shared config
-        run: cat .github/config.env >> "$GITHUB_ENV"
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install crane
-        uses: imjasonh/setup-crane@v0.4
-
-      - name: Install Python dependencies
-        run: pip install -r requirements.txt
-
-      - name: Create multi-arch artifact index
-        run: ./build.py release index

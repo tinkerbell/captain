@@ -14,7 +14,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     tar \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && git config --global --add safe.directory /work
 
 # Install crane (with checksum verification)
 RUN DPKG_ARCH="$(dpkg --print-architecture)" \
@@ -25,12 +26,12 @@ RUN DPKG_ARCH="$(dpkg --print-architecture)" \
        esac \
     && CRANE_TARBALL="go-containerregistry_Linux_${CRANE_ARCH}.tar.gz" \
     && CRANE_BASE_URL="https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}" \
-    && curl -fsSL "${CRANE_BASE_URL}/${CRANE_TARBALL}" -o /tmp/crane.tar.gz \
+    && curl -fsSL "${CRANE_BASE_URL}/${CRANE_TARBALL}" -o /tmp/${CRANE_TARBALL} \
     && curl -fsSL "${CRANE_BASE_URL}/checksums.txt" -o /tmp/checksums.txt \
     && grep " ${CRANE_TARBALL}$" /tmp/checksums.txt | (cd /tmp && sha256sum -c -) \
-    && tar -xz -f /tmp/crane.tar.gz -C /usr/local/bin crane \
+    && tar -xz -f /tmp/${CRANE_TARBALL} -C /usr/local/bin crane \
     && chmod +x /usr/local/bin/crane \
-    && rm -f /tmp/crane.tar.gz /tmp/checksums.txt \
+    && rm -f /tmp/${CRANE_TARBALL} /tmp/checksums.txt \
     && crane version
 
 # Install Python dependencies

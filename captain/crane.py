@@ -130,6 +130,14 @@ def index_append(
     run(cmd)
 
 
+def digest(image_ref: str, *, logger: StageLogger | None = None) -> str:
+    """Return the digest (``sha256:…``) of *image_ref*."""
+    _log = logger or _default_log
+    _log.log(f"crane digest {image_ref}")
+    result = run(["crane", "digest", image_ref], capture=True)
+    return result.stdout.strip()
+
+
 def tag(src_ref: str, new_tag: str, *, logger: StageLogger | None = None) -> None:
     """Tag *src_ref* with *new_tag*."""
     _log = logger or _default_log

@@ -33,29 +33,21 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: Pull release artifacts (amd64)
+      - name: Pull release artifacts (both)
         env:
-          ARCH: amd64
           VERSION_EXCLUDE: ${{ github.ref_name }}
-        run: ./build.py release pull --pull-output artifacts/amd64
-
-      - name: Pull release artifacts (arm64)
-        env:
-          ARCH: arm64
-          VERSION_EXCLUDE: ${{ github.ref_name }}
-        run: ./build.py release pull --pull-output artifacts/arm64
+        run: ./build.py release pull --target both --pull-output artifacts/both
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.ref_name }}" \
-            artifacts/amd64/* \
-            artifacts/arm64/* \
+            artifacts/both/* \
             --generate-notes \
             --title "${{ github.ref_name }}"
 
-      - name: Tag OCI artifact index with version
+      - name: Tag OCI artifacts with version
         env:
           VERSION_EXCLUDE: ${{ github.ref_name }}
         run: ./build.py release tag ${{ github.ref_name }}
