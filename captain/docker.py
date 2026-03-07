@@ -98,12 +98,14 @@ def run_in_release(cfg: Config, *extra_args: str) -> None:
     """Run a command inside the release container.
 
     Similar to :func:`run_in_builder` but uses the lightweight release
-    image which has crane, Python, and git.
+    image which has buildah, skopeo, Python, and git.
     """
     docker_args: list[str] = [
         "docker",
         "run",
         "--rm",
+        # Buildah needs mount/remount capabilities for layer operations.
+        "--privileged",
         "-v",
         f"{cfg.project_dir}:/work",
         "-w",
@@ -112,7 +114,18 @@ def run_in_release(cfg: Config, *extra_args: str) -> None:
         f"ARCH={cfg.arch}",
         "-e",
         "RELEASE_MODE=native",
+        # Chroot isolation lets buildah work inside an unprivileged container
+        # (no user namespaces needed — we only assemble scratch images).
+        "-e",
+        "BUILDAH_ISOLATION=chroot",
     ]
+    # Forward host registry credentials so buildah/skopeo can authenticate.
+    # The caller sets these env vars on the host (e.g. via docker login or
+    # CI secrets); they are passed through to the container as-is.
+    for var in ("REGISTRY_AUTH_FILE", "REGISTRY_USERNAME", "REGISTRY_PASSWORD"):
+        val = os.environ.get(var)
+        if val:
+            docker_args += ["-e", f"{var}={val}"]
     docker_args.extend(extra_args)
     run(docker_args)
 

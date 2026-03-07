@@ -167,7 +167,7 @@ def check_release_dependencies() -> list[str]:
 
     Returns a list of missing command names (empty if all found).
     """
-    return _missing(["crane", "git", "tar"])
+    return _missing(["buildah", "skopeo", "git"])
 
 
 def check_dependencies(arch: str) -> list[str]:

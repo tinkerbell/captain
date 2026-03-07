@@ -3,7 +3,7 @@
 Each artifact file is pushed as its own layer so that OCI registries
 can deduplicate blobs between per-arch and combined images.
 
-Combined image (``target="both"``, no tag suffix):
+Combined image (``target="combined"``, no tag suffix):
   A multi-arch index where each platform manifest has the native
   arch's layers first, then the other arch's layers (8 layers total).
   ``linux/amd64`` → ``[A1‥A4, B1‥B4]``,
@@ -18,19 +18,25 @@ native per-arch image gives cache hits, because the per-arch layers
 form a prefix of the combined chain.  Cross-arch caching is not
 possible due to Docker's chain-ID Merkle structure.
 
+Images are built locally via ``buildah`` and pushed as finished
+manifests — no intermediate untagged manifests are created on the
+registry.  Read operations (digest, tag, export) use ``skopeo``.
+
 * **containerd** can pull it (valid ``rootfs.diff_ids`` in the config) —
   Kubernetes image-volume mounts work.
-* **crane export** extracts individual files for release workflows.
+* ``skopeo`` extracts individual files for release workflows.
 """
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
 import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
-from captain import artifacts, crane
+from captain import artifacts, buildah, skopeo
 from captain.config import Config
 from captain.log import StageLogger, for_stage
 from captain.util import ensure_dir
@@ -143,9 +149,8 @@ def _collect_arch_artifacts(
     return push_files
 
 
-def _push_platform_manifest(
+def _build_platform_image(
     layer_tars: list[Path],
-    temp_ref: str,
     platform: str,
     sha: str,
     repository: str,
@@ -154,10 +159,24 @@ def _push_platform_manifest(
     created: str,
     tag: str,
     artifact_name: str,
-) -> None:
-    """Push artifact layers and set platform metadata on a temp manifest."""
-    for i, tar_path in enumerate(layer_tars):
-        crane.append(tar_path, temp_ref, base=temp_ref if i > 0 else None, logger=logger)
+    base: str = "scratch",
+) -> str:
+    """Build an OCI image locally for *platform*.
+
+    Each tar becomes its own OCI layer (add → commit cycle).  All commits
+    use the same fixed timestamp; only the final commit carries the image
+    metadata.
+
+    *base* is the starting image — ``"scratch"`` for a new image, or a
+    ``docker://`` ref to extend an existing registry image.  When a
+    registry ref is used the inherited layers keep their original blob
+    digests.
+
+    Returns the local image ID (not pushed yet — the caller adds it
+    to a manifest list and pushes everything via ``manifest push --all``).
+    """
+    os_name, arch = platform.split("/")
+    epoch = int(datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp())
     oci_metadata = {
         "org.opencontainers.image.created": created,
         "org.opencontainers.image.source": f"https://github.com/{repository}",
@@ -168,14 +187,171 @@ def _push_platform_manifest(
         "org.opencontainers.image.vendor": "Tinkerbell",
         "org.opencontainers.image.licenses": "Apache-2.0",
     }
-    crane.mutate(
-        temp_ref,
-        platform=platform,
-        annotations=oci_metadata,
-        labels=oci_metadata,
-        logger=logger,
-    )
-    crane.set_created(temp_ref, created, logger=logger)
+
+    # Build one layer per tar: from base → add file → commit → repeat.
+    # Track intermediate image IDs so they can be cleaned up afterwards;
+    # only the final image (returned to the caller) is kept.
+    current: str = base
+    intermediates: list[str] = []
+    for i, tar_path in enumerate(layer_tars):
+        is_last = i == len(layer_tars) - 1
+        ctr = buildah.from_image(current, platform=platform, logger=logger)
+        buildah.add(ctr, [tar_path], logger=logger)
+        if is_last:
+            buildah.config(
+                ctr,
+                os=os_name,
+                arch=arch,
+                annotations=oci_metadata,
+                labels=oci_metadata,
+                logger=logger,
+            )
+        prev = current
+        current = buildah.commit(ctr, timestamp=epoch, logger=logger)
+        if prev != base:
+            intermediates.append(prev)
+
+    for img in intermediates:
+        with contextlib.suppress(Exception):
+            buildah.rmi(img, logger=logger)
+
+    return current
+
+
+def _create_push_cleanup(
+    image_ids: list[str],
+    dest_ref: str,
+    logger: StageLogger,
+) -> None:
+    """Create a manifest list from *image_ids*, push it to *dest_ref*, and clean up.
+
+    Uses a temporary local manifest name to avoid collisions on repeated
+    publishes.  After a successful (or failed) push, the local manifest
+    and all *image_ids* are removed on a best-effort basis.
+    """
+    temp_name = f"captain-local-{uuid4().hex[:12]}"
+    manifest_id: str | None = None
+    try:
+        manifest_id = buildah.manifest_create(temp_name, logger=logger)
+        for image_id in image_ids:
+            buildah.manifest_add(manifest_id, image_id, logger=logger)
+        buildah.manifest_push(manifest_id, dest_ref, logger=logger)
+    finally:
+        if manifest_id is not None:
+            with contextlib.suppress(Exception):
+                buildah.rmi(manifest_id, logger=logger)
+        for image_id in image_ids:
+            with contextlib.suppress(Exception):
+                buildah.rmi(image_id, logger=logger)
+
+
+def _publish_single_arch(
+    *,
+    layer_tars: list[Path],
+    ref: str,
+    tag: str,
+    sha: str,
+    repository: str,
+    artifact_name: str,
+    created: str,
+    logger: StageLogger,
+) -> None:
+    """Build a per-arch multi-arch index and push it.
+
+    Both platform entries (linux/amd64 and linux/arm64) carry the same
+    4 layers.
+    """
+    image_ids: list[str] = []
+    for platform_arch in _ARCHES:
+        image_id = _build_platform_image(
+            layer_tars,
+            f"linux/{platform_arch}",
+            sha,
+            repository,
+            logger,
+            created=created,
+            tag=tag,
+            artifact_name=artifact_name,
+        )
+        image_ids.append(image_id)
+
+    _create_push_cleanup(image_ids, ref, logger)
+
+
+def _publish_combined(
+    *,
+    arch_layer_tars: dict[str, list[Path]],
+    registry: str,
+    repository: str,
+    artifact_name: str,
+    tag: str,
+    sha: str,
+    created: str,
+    force: bool = False,
+    logger: StageLogger,
+) -> bool:
+    """Build and push the combined multi-arch image.
+
+    Each platform manifest has the native arch's layers first, then the
+    other arch's layers (8 layers total).  The native layers are
+    inherited from the per-arch image in the registry so that blob
+    digests match exactly between the per-arch and combined images.
+
+    If the per-arch images don't exist in the registry yet (e.g.
+    running ``--target combined`` locally with no prior per-arch publish),
+    they are built and pushed first as a fallback.
+
+    Skips the combined image if it already exists (unless *force*).
+    """
+    combined_ref = _image_ref(registry, repository, artifact_name, tag)
+
+    # Skip if the combined image already exists.
+    if not force and skopeo.image_exists(combined_ref, logger=logger):
+        logger.log(f"{combined_ref} already exists — skipping (use --force to overwrite)")
+        return False
+
+    # Ensure per-arch images exist in the registry.
+    for arch in _ARCHES:
+        per_arch_tag = f"{tag}-{arch}"
+        per_arch_ref = _image_ref(registry, repository, artifact_name, per_arch_tag)
+        if skopeo.image_exists(per_arch_ref, logger=logger):
+            logger.log(f"Found {per_arch_ref} in registry — will reuse layers for combined image")
+        else:
+            logger.log(
+                f"{per_arch_ref} not found in registry — building and pushing before combined image"
+            )
+            _publish_single_arch(
+                layer_tars=arch_layer_tars[arch],
+                ref=per_arch_ref,
+                tag=per_arch_tag,
+                sha=sha,
+                repository=repository,
+                artifact_name=artifact_name,
+                created=created,
+                logger=logger,
+            )
+
+    # Build the combined image using per-arch registry images as bases.
+    # Inherited layers keep their original blob digests.
+    image_ids: list[str] = []
+    for arch in _ARCHES:
+        other = next(a for a in _ARCHES if a != arch)
+        per_arch_ref = _image_ref(registry, repository, artifact_name, f"{tag}-{arch}")
+        image_id = _build_platform_image(
+            arch_layer_tars[other],
+            f"linux/{arch}",
+            sha,
+            repository,
+            logger,
+            created=created,
+            tag=tag,
+            artifact_name=artifact_name,
+            base=f"docker://{per_arch_ref}",
+        )
+        image_ids.append(image_id)
+
+    _create_push_cleanup(image_ids, combined_ref, logger)
+    return True
 
 
 def publish(
@@ -187,6 +363,7 @@ def publish(
     artifact_name: str,
     tag: str,
     sha: str,
+    force: bool = False,
     logger: StageLogger | None = None,
 ) -> None:
     """Collect artifacts and publish a multi-arch OCI index.
@@ -196,15 +373,24 @@ def publish(
     so OCI registries deduplicate blobs automatically.
 
     *target* selects which artifacts to include: ``"amd64"``,
-    ``"arm64"``, or ``"both"``.
+    ``"arm64"``, or ``"combined"``.
+
+    Images are skipped if they already exist in the registry
+    (unless *force* is ``True``).  For per-arch targets this prevents
+    overwriting images that the combined image depends on.
     """
     _log = logger or _default_log
-    arches = list(_ARCHES) if target == "both" else [target]
-    tag_suffix = "" if target == "both" else f"-{target}"
+    arches = list(_ARCHES) if target == "combined" else [target]
+    tag_suffix = "" if target == "combined" else f"-{target}"
     full_tag = f"{tag}{tag_suffix}"
     final_ref = _image_ref(registry, repository, artifact_name, full_tag)
+
+    # For per-arch targets, skip if the image already exists.
+    if target != "combined" and not force and skopeo.image_exists(final_ref, logger=_log):
+        _log.log(f"{final_ref} already exists — skipping (use --force to overwrite)")
+        return
+
     out = ensure_dir(cfg.output_dir)
-    image_base = f"{registry}/{repository}/{artifact_name}"
     created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # Collect artifacts for every requested architecture.
@@ -222,50 +408,38 @@ def publish(
     for arch, files in arch_files.items():
         arch_layer_tars[arch] = [_deterministic_tar(f, out) for f in files]
 
+    pushed = True
     try:
-        digest_refs: list[str] = []
-
-        if target == "both":
-            # Combined image: native-first ordering per platform.
-            for arch in _ARCHES:
-                other = next(a for a in _ARCHES if a != arch)
-                ordered = list(arch_layer_tars[arch]) + list(arch_layer_tars[other])
-                _push_platform_manifest(
-                    ordered,
-                    final_ref,
-                    f"linux/{arch}",
-                    sha,
-                    repository,
-                    _log,
-                    created=created,
-                    tag=full_tag,
-                    artifact_name=artifact_name,
-                )
-                d = crane.digest(final_ref, logger=_log)
-                digest_refs.append(f"{image_base}@{d}")
+        if target == "combined":
+            pushed = _publish_combined(
+                arch_layer_tars=arch_layer_tars,
+                registry=registry,
+                repository=repository,
+                artifact_name=artifact_name,
+                tag=tag,
+                sha=sha,
+                created=created,
+                force=force,
+                logger=_log,
+            )
         else:
-            # Per-arch: same layers under both platforms.
-            for arch in _ARCHES:
-                _push_platform_manifest(
-                    arch_layer_tars[target],
-                    final_ref,
-                    f"linux/{arch}",
-                    sha,
-                    repository,
-                    _log,
-                    created=created,
-                    tag=full_tag,
-                    artifact_name=artifact_name,
-                )
-                d = crane.digest(final_ref, logger=_log)
-                digest_refs.append(f"{image_base}@{d}")
-
-        # Create multi-arch index (overwrites the tag with the index)
-        crane.index_append(final_ref, digest_refs, logger=_log)
+            _publish_single_arch(
+                layer_tars=arch_layer_tars[target],
+                ref=final_ref,
+                tag=full_tag,
+                sha=sha,
+                repository=repository,
+                artifact_name=artifact_name,
+                created=created,
+                logger=_log,
+            )
     finally:
         for tars in arch_layer_tars.values():
             for t in tars:
                 t.unlink(missing_ok=True)
+
+    if not pushed:
+        return
 
     # Recap
     artifact_names: list[str] = []
@@ -295,14 +469,14 @@ def pull(
 ) -> None:
     """Pull and extract OCI artifacts.
 
-    *target* may be ``"amd64"``, ``"arm64"``, or ``"both"``.  The tag
+    *target* may be ``"amd64"``, ``"arm64"``, or ``"combined"``.  The tag
     suffix is ``-{target}`` for single architectures, or bare ``{tag}``
-    for ``"both"``.
+    for ``"combined"``.
     """
     _log = logger or _default_log
-    tag_suffix = "" if target == "both" else f"-{target}"
+    tag_suffix = "" if target == "combined" else f"-{target}"
     ref = _image_ref(registry, repository, artifact_name, f"{tag}{tag_suffix}")
-    crane.export_image(ref, output_dir, logger=_log)
+    skopeo.export_image(ref, output_dir, logger=_log)
 
     # Recap
     extracted = sorted(f.name for f in Path(output_dir).iterdir() if f.is_file())
@@ -326,9 +500,10 @@ def tag_image(
 ) -> None:
     """Tag an existing OCI artifact image with a new version."""
     _log = logger or _default_log
-    ref = _image_ref(registry, repository, artifact_name, src_tag)
-    crane.tag(ref, new_tag, logger=_log)
-    _log.log(f"Tagged {ref} → {new_tag}")
+    src_ref = _image_ref(registry, repository, artifact_name, src_tag)
+    dest_ref = _image_ref(registry, repository, artifact_name, new_tag)
+    skopeo.copy(src_ref, dest_ref, logger=_log)
+    _log.log(f"Tagged {src_ref} → {new_tag}")
 
 
 def tag_all(

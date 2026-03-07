@@ -96,9 +96,13 @@ def collect_checksums(
         digest = _sha256(path)
         lines.append(f"{digest}  {path.name}")
     if lines:
+        content = "\n".join(lines) + "\n"
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text("\n".join(lines) + "\n")
-        _log.log(f"Wrote checksums to {output}")
+        if output.is_file() and output.read_text() == content:
+            _log.log(f"Checksums unchanged: {output}")
+        else:
+            output.write_text(content)
+            _log.log(f"Wrote checksums to {output}")
         for line in lines:
             _log.log(f"  {line}")
     else:

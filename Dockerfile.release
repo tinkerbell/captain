@@ -1,38 +1,32 @@
 # Lightweight container for OCI release operations (publish, index, pull, tag).
-# Contains crane, Python 3, git, and configargparse — nothing else.
+# Contains buildah, skopeo, Python 3, git, and configargparse — nothing else.
 #
 # Usage:
 #   docker build -f Dockerfile.release -t captainos-release .
 #   docker run --rm -v $(pwd):/work captainos-release release publish
 FROM python:3.12-slim
 
-ARG CRANE_VERSION=v0.21.2
-
-# Install git (needed for version tag computation) and tar (for crane export)
+# Install buildah, skopeo, and git
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    buildah \
+    skopeo \
     git \
     ca-certificates \
-    curl \
-    tar \
     && rm -rf /var/lib/apt/lists/* \
     && git config --global --add safe.directory /work
 
-# Install crane (with checksum verification)
-RUN DPKG_ARCH="$(dpkg --print-architecture)" \
-    && case "$DPKG_ARCH" in \
-         amd64) CRANE_ARCH="x86_64" ;; \
-         arm64) CRANE_ARCH="arm64" ;; \
-         *) echo "Unsupported arch: $DPKG_ARCH" >&2; exit 1 ;; \
-       esac \
-    && CRANE_TARBALL="go-containerregistry_Linux_${CRANE_ARCH}.tar.gz" \
-    && CRANE_BASE_URL="https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}" \
-    && curl -fsSL "${CRANE_BASE_URL}/${CRANE_TARBALL}" -o /tmp/${CRANE_TARBALL} \
-    && curl -fsSL "${CRANE_BASE_URL}/checksums.txt" -o /tmp/checksums.txt \
-    && grep " ${CRANE_TARBALL}$" /tmp/checksums.txt | (cd /tmp && sha256sum -c -) \
-    && tar -xz -f /tmp/${CRANE_TARBALL} -C /usr/local/bin crane \
-    && chmod +x /usr/local/bin/crane \
-    && rm -f /tmp/${CRANE_TARBALL} /tmp/checksums.txt \
-    && crane version
+# Configure rootless storage driver and chroot isolation (no user-namespace
+# required — we only assemble scratch images, never RUN anything inside them).
+RUN printf '[storage]\ndriver = "vfs"\nrunroot = "/var/tmp/buildah-runroot"\ngraphroot = "/var/tmp/buildah-storage"\n' \
+    > /etc/containers/storage.conf
+ENV BUILDAH_ISOLATION=chroot
+
+# Buildah 1.39+ on Debian requires netavark but we never need networking
+# (all images are FROM scratch with no RUN steps).  A no-op stub satisfies
+# the startup check.
+RUN mkdir -p /usr/libexec/podman \
+    && printf '#!/bin/sh\nexit 0\n' > /usr/libexec/podman/netavark \
+    && chmod +x /usr/libexec/podman/netavark
 
 # Install Python dependencies
 COPY requirements.txt /tmp/requirements.txt

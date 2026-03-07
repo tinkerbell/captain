@@ -360,18 +360,18 @@ jobs:
           retention-days: 1
 
   # -------------------------------------------------------------------
-  # Publish artifacts and compute checksums
+  # Publish per-arch artifacts and compute checksums
   # -------------------------------------------------------------------
-  publish-artifacts:
+  publish-per-arch:
     if: github.ref == 'refs/heads/main'
     runs-on: ${{ matrix.target == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     needs: [build-iso]
     strategy:
       fail-fast: false
       matrix:
-        target: [amd64, arm64, both]
+        target: [amd64, arm64]
     env:
-      ARCH: ${{ matrix.target == 'both' && 'amd64' || matrix.target }}
+      ARCH: ${{ matrix.target }}
       TARGET: ${{ matrix.target }}
     steps:
       - name: Checkout code
@@ -382,43 +382,87 @@ jobs:
       - name: Load shared config
         run: cat .github/config.env >> "$GITHUB_ENV"
 
+      - name: Download kernel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: kernel-${{ matrix.target }}
+          path: mkosi.output
+
+      - name: Download initramfs artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: initramfs-${{ matrix.target }}
+          path: out
+
+      - name: Download ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: iso-${{ matrix.target }}
+          path: out
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish artifacts to GHCR
+        run: ./build.py release publish
+
+  # -------------------------------------------------------------------
+  # Publish combined multi-arch image (reuses per-arch registry blobs)
+  # -------------------------------------------------------------------
+  publish-combined:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: [publish-per-arch]
+    env:
+      ARCH: amd64
+      TARGET: combined
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Load shared config
+        run: cat .github/config.env >> "$GITHUB_ENV"
+
       - name: Download kernel artifacts (amd64)
-        if: matrix.target == 'amd64' || matrix.target == 'both'
         uses: actions/download-artifact@v4
         with:
           name: kernel-amd64
           path: mkosi.output
 
       - name: Download initramfs artifacts (amd64)
-        if: matrix.target == 'amd64' || matrix.target == 'both'
         uses: actions/download-artifact@v4
         with:
           name: initramfs-amd64
           path: out
 
       - name: Download ISO artifact (amd64)
-        if: matrix.target == 'amd64' || matrix.target == 'both'
         uses: actions/download-artifact@v4
         with:
           name: iso-amd64
           path: out
 
       - name: Download kernel artifacts (arm64)
-        if: matrix.target == 'arm64' || matrix.target == 'both'
         uses: actions/download-artifact@v4
         with:
           name: kernel-arm64
           path: mkosi.output
 
       - name: Download initramfs artifacts (arm64)
-        if: matrix.target == 'arm64' || matrix.target == 'both'
         uses: actions/download-artifact@v4
         with:
           name: initramfs-arm64
           path: out
 
       - name: Download ISO artifact (arm64)
-        if: matrix.target == 'arm64' || matrix.target == 'both'
         uses: actions/download-artifact@v4
         with:
           name: iso-arm64
@@ -434,8 +478,5 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install crane
-        uses: imjasonh/setup-crane@v0.4
-
-      - name: Publish artifacts to GHCR
+      - name: Publish combined image to GHCR
         run: ./build.py release publish

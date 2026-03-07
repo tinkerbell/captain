@@ -24,26 +24,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install crane
-        uses: imjasonh/setup-crane@v0.4
-
       - name: Load shared config
         run: cat .github/config.env >> "$GITHUB_ENV"
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: Pull release artifacts (both)
+      - name: Pull release artifacts (combined)
         env:
           VERSION_EXCLUDE: ${{ github.ref_name }}
-        run: ./build.py release pull --target both --pull-output artifacts/both
+        run: ./build.py release pull --target combined --pull-output artifacts/combined
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.ref_name }}" \
-            artifacts/both/* \
+            artifacts/combined/* \
             --generate-notes \
             --title "${{ github.ref_name }}"
 

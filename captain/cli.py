@@ -153,7 +153,7 @@ commands:
         desc = "OCI release workflow: pull (or build) → publish → tag"
         release_cmds = {
             "publish": "Publish artifacts as a multi-arch OCI image",
-            "pull": "Pull and extract artifacts (amd64, arm64, or both)",
+            "pull": "Pull and extract artifacts (amd64, arm64, or combined)",
             "tag": "Tag all artifact images with a version",
         }
         commands_list = "\n".join(f"  {name:14s} {d}" for name, d in release_cmds.items())
@@ -402,8 +402,8 @@ def _add_release_target_flag(parser: configargparse.ArgParser) -> None:
         "--target",
         env_var="TARGET",
         default=None,
-        choices=["amd64", "arm64", "both"],
-        help="artifact target (amd64, arm64, or both; default: --arch value)",
+        choices=["amd64", "arm64", "combined"],
+        help="artifact target (amd64, arm64, or combined; default: --arch value)",
     )
     g.add_argument(
         "--git-sha",
@@ -418,6 +418,13 @@ def _add_release_target_flag(parser: configargparse.ArgParser) -> None:
         metavar="TAG",
         default=None,
         help="tag to exclude from git-describe version lookup",
+    )
+    g.add_argument(
+        "--force",
+        env_var="FORCE",
+        action="store_true",
+        default=False,
+        help="publish even if the image already exists in the registry",
     )
 
 
@@ -978,7 +985,7 @@ _RELEASE_SUBCMD_INFO: dict[str, tuple[str, list]] = {
         [_add_common_flags, _add_release_base_flags, _add_release_target_flag],
     ),
     "pull": (
-        "Pull and extract artifacts (amd64, arm64, or both)",
+        "Pull and extract artifacts (amd64, arm64, or combined)",
         [
             _add_common_flags,
             _add_release_base_flags,
@@ -1092,6 +1099,8 @@ def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> Non
         if sub in ("publish", "pull"):
             target = getattr(args, "target", None) or cfg.arch
             env_args += ["-e", f"TARGET={target}"]
+        if getattr(args, "force", False):
+            env_args += ["-e", "FORCE=true"]
         pull_output = getattr(args, "pull_output", None)
 
         # Build the inner command.
@@ -1135,6 +1144,7 @@ def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> Non
 
     if sub == "publish":
         target = getattr(args, "target", None) or cfg.arch
+        force = getattr(args, "force", False)
         oci.publish(
             cfg,
             target=target,
@@ -1143,6 +1153,7 @@ def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> Non
             artifact_name=artifact_name,
             tag=tag,
             sha=sha,
+            force=force,
             logger=rlog,
         )
 
