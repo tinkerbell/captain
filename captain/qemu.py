@@ -65,11 +65,19 @@ def run_qemu(cfg: Config, args: argparse.Namespace | None = None) -> None:
     :mod:`configargparse`.  When provided, Tinkerbell kernel cmdline
     parameters are drawn from it instead of the environment.
     """
-    kernel = cfg.output_dir / f"vmlinuz-{cfg.arch}"
-    initrd = cfg.output_dir / f"initramfs-{cfg.arch}.cpio.zst"
+    kernel = cfg.output_dir / f"vmlinuz-{cfg.kernel_version}-{cfg.arch}"
+    initrd = cfg.output_dir / f"initramfs-{cfg.kernel_version}-{cfg.arch}.cpio.zst"
 
-    if not kernel.is_file() or not initrd.is_file():
-        _log.err("Build artifacts not found. Run './build.py' first.")
+    missing: list[str] = []
+    if not kernel.is_file():
+        missing.append(str(kernel))
+    if not initrd.is_file():
+        missing.append(str(initrd))
+    if missing:
+        _log.err("Build artifacts not found:")
+        for m in missing:
+            _log.err(f"  {m}")
+        _log.err(f"Run './build.py --kernel-version {cfg.kernel_version}' first.")
         sys.exit(1)
 
     tink = _tink_cmdline(args) if args is not None else ""

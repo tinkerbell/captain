@@ -1,9 +1,9 @@
 # CaptainOS kernel defconfig for arm64 (aarch64)
 # Minimal config for bare-metal provisioning with container/network support.
-# Based on defconfig with targeted additions for CaptainOS use case.
+# Based on 6.12.y config with targeted additions for CaptainOS use case, adapted for kernel 6.18.
 #
 # Generate a full .config from this:
-#   cp defconfig.arm64 .config && make ARCH=arm64 olddefconfig
+#   cp 6.18.y.arm64 .config && make ARCH=arm64 olddefconfig
 
 # --- Architecture ---
 CONFIG_ARM64=y

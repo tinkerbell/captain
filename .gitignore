@@ -4,7 +4,7 @@ mkosi.cache/
 mkosi.tools/
 mkosi.tools.manifest
 mkosi.builddir/
-config/.config.resolved.*
+kernel.configs/.config.resolved.*
 out/
 
 # Editor

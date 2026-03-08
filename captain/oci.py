@@ -115,6 +115,7 @@ def _collect_arch_artifacts(
     project_dir: Path,
     out: Path,
     arch: str,
+    kernel_version: str,
     logger: StageLogger,
 ) -> list[Path]:
     """Collect and return the artifact files for a single architecture.
@@ -124,9 +125,9 @@ def _collect_arch_artifacts(
     import shutil
 
     # Collect kernel
-    vmlinuz_dir = project_dir / "mkosi.output" / "vmlinuz" / arch
+    vmlinuz_dir = project_dir / "mkosi.output" / "kernel" / kernel_version / arch
     vmlinuz_files = sorted(vmlinuz_dir.glob("vmlinuz-*")) if vmlinuz_dir.is_dir() else []
-    vmlinuz_dst = out / f"vmlinuz-{arch}"
+    vmlinuz_dst = out / f"vmlinuz-{kernel_version}-{arch}"
     if vmlinuz_files:
         shutil.copy2(vmlinuz_files[0], vmlinuz_dst)
         logger.log(f"kernel: {vmlinuz_dst}")
@@ -134,11 +135,11 @@ def _collect_arch_artifacts(
         logger.warn(f"No kernel image found for {arch}")
 
     arch_files = [
-        out / f"vmlinuz-{arch}",
-        out / f"initramfs-{arch}.cpio.zst",
-        out / f"captainos-{arch}.iso",
+        out / f"vmlinuz-{kernel_version}-{arch}",
+        out / f"initramfs-{kernel_version}-{arch}.cpio.zst",
+        out / f"captainos-{kernel_version}-{arch}.iso",
     ]
-    checksums_path = out / f"sha256sums-{arch}.txt"
+    checksums_path = out / f"sha256sums-{kernel_version}-{arch}.txt"
     artifacts.collect_checksums(arch_files, checksums_path, logger=logger)
 
     push_files = [*arch_files, checksums_path]
@@ -400,6 +401,7 @@ def publish(
             cfg.project_dir,
             out,
             arch,
+            cfg.kernel_version,
             _log,
         )
 

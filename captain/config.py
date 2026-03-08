@@ -13,6 +13,10 @@ from captain.util import ArchInfo, get_arch_info
 # Valid values for KERNEL_MODE and MKOSI_MODE.
 VALID_MODES = ("docker", "native", "skip")
 
+# The single source of truth for the default kernel version.
+# Override at runtime via --kernel-version or KERNEL_VERSION env var.
+DEFAULT_KERNEL_VERSION = "6.18.16"
+
 
 @dataclass(slots=True)
 class Config:
@@ -24,7 +28,8 @@ class Config:
 
     # Target
     arch: str = "amd64"
-    kernel_version: str = "6.12.69"
+    kernel_version: str = DEFAULT_KERNEL_VERSION
+    kernel_config: str | None = None
     kernel_src: str | None = None
 
     # Docker
@@ -56,6 +61,7 @@ class Config:
 
     def __post_init__(self) -> None:
         self.arch_info = get_arch_info(self.arch)
+        self.arch = self.arch_info.arch  # normalise aliases (x86_64 → amd64, etc.)
         for name, value in (
             ("KERNEL_MODE", self.kernel_mode),
             ("TOOLS_MODE", self.tools_mode),
@@ -96,7 +102,8 @@ class Config:
             project_dir=project_dir,
             output_dir=project_dir / "out",
             arch=getattr(args, "arch", "amd64"),
-            kernel_version=getattr(args, "kernel_version", "6.12.69"),
+            kernel_version=getattr(args, "kernel_version", DEFAULT_KERNEL_VERSION),
+            kernel_config=getattr(args, "kernel_config", None) or None,
             kernel_src=getattr(args, "kernel_src", None) or None,
             builder_image=getattr(args, "builder_image", "captainos-builder"),
             no_cache=getattr(args, "no_cache", False),
@@ -125,7 +132,8 @@ class Config:
             project_dir=project_dir,
             output_dir=project_dir / "out",
             arch=os.environ.get("ARCH", "amd64"),
-            kernel_version=os.environ.get("KERNEL_VERSION", "6.12.69"),
+            kernel_version=os.environ.get("KERNEL_VERSION", DEFAULT_KERNEL_VERSION),
+            kernel_config=os.environ.get("KERNEL_CONFIG") or None,
             kernel_src=os.environ.get("KERNEL_SRC") or None,
             builder_image=os.environ.get("BUILDER_IMAGE", "captainos-builder"),
             no_cache=os.environ.get("NO_CACHE") == "1",
@@ -143,22 +151,35 @@ class Config:
         )
 
     @property
-    def extra_tree_output(self) -> Path:
-        """Per-arch mkosi ExtraTrees staging directory.
+    def tools_output(self) -> Path:
+        """Per-arch staging directory for downloaded tools.
 
-        Everything placed here (kernel modules, tools, etc.) is merged
-        into the initramfs CPIO by mkosi via ``--extra-tree=``.
+        Contains containerd, runc, nerdctl, and CNI plugins.
+        Passed to mkosi via ``--extra-tree=`` to merge into the initramfs.
+        Kernel modules are stored separately under :attr:`kernel_output`.
         """
-        return self.project_dir / "mkosi.output" / "extra-tree" / self.arch
+        return self.project_dir / "mkosi.output" / "tools" / self.arch
 
     @property
-    def vmlinuz_output(self) -> Path:
-        """Per-arch directory for the vmlinuz kernel image.
+    def kernel_output(self) -> Path:
+        """Per-version, per-arch directory for all kernel build artifacts.
 
-        Kept outside ExtraTrees so the kernel binary is not packed into
-        the initramfs CPIO — iPXE loads it separately.
+        Contains the vmlinuz image (loaded separately by iPXE) and
+        a ``modules/`` subtree that mirrors a root filesystem layout
+        (``usr/lib/modules/{kver}/``) so it can be passed directly
+        as an ``--extra-tree=`` to mkosi.
         """
-        return self.project_dir / "mkosi.output" / "vmlinuz" / self.arch
+        return self.project_dir / "mkosi.output" / "kernel" / self.kernel_version / self.arch
+
+    @property
+    def modules_output(self) -> Path:
+        """Per-version, per-arch root for kernel modules.
+
+        Returns ``kernel/{version}/{arch}/modules`` which contains a
+        merged-usr tree (``usr/lib/modules/{kver}/``) suitable for
+        passing as ``--extra-tree=`` to mkosi.
+        """
+        return self.kernel_output / "modules"
 
     @property
     def mkosi_output(self) -> Path:
@@ -166,15 +187,15 @@ class Config:
 
     @property
     def initramfs_output(self) -> Path:
-        """Per-arch directory for mkosi initramfs output (image.cpio.zst)."""
-        return self.project_dir / "mkosi.output" / "initramfs" / self.arch
+        """Per-version, per-arch directory for mkosi initramfs output (image.cpio.zst)."""
+        return self.project_dir / "mkosi.output" / "initramfs" / self.kernel_version / self.arch
 
     @property
     def iso_output(self) -> Path:
-        """Per-arch directory for the built ISO image."""
-        return self.project_dir / "mkosi.output" / "iso" / self.arch
+        """Per-version, per-arch directory for the built ISO image."""
+        return self.project_dir / "mkosi.output" / "iso" / self.kernel_version / self.arch
 
     @property
     def iso_staging(self) -> Path:
-        """Per-arch staging directory for assembling the ISO filesystem."""
-        return self.project_dir / "mkosi.output" / "iso-staging" / self.arch
+        """Per-version, per-arch staging directory for assembling the ISO filesystem."""
+        return self.project_dir / "mkosi.output" / "iso-staging" / self.kernel_version / self.arch

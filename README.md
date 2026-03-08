@@ -26,7 +26,7 @@ It is built with [mkosi](https://github.com/systemd/mkosi), producing a minimal 
 
 The build has four stages:
 
-1. **Kernel compilation** (`./build.py kernel`) — builds a Linux kernel from source using minimal defconfigs (`config/defconfig.{amd64,arm64}`)
+1. **Kernel compilation** (`./build.py kernel`) — builds a Linux kernel from source using defconfigs from `kernel.configs/`
 2. **Tool download** (`./build.py tools`) — fetches pinned binary releases of the container runtime stack
 3. **Initramfs build** (`./build.py initramfs`) — assembles a Debian Trixie CPIO initramfs with systemd, injecting the kernel, modules, and tools using `mkosi`
 4. **ISO assembly** (`./build.py iso`) — builds a UEFI-bootable ISO with GRUB via `grub-mkrescue`
@@ -38,7 +38,7 @@ The build has four stages:
 ```bash
 pip install -r requirements.txt
 
-# Build with defaults (amd64, kernel 6.12.69)
+# Build with defaults (amd64, kernel 6.18.16)
 ./build.py --help
 
 usage: build.py [flags]
@@ -54,7 +54,7 @@ build configuration:
   --no-cache                          rebuild builder image without Docker cache
 
 kernel:
-  --kernel-version VER                kernel version to build (default: 6.12.69)
+  --kernel-version VER                kernel version to build (default: 6.18.16)
   --kernel-src PATH                   path to local kernel source tree
   --kernel-mode {docker,native,skip}  kernel stage execution mode (default: docker)
   --force-kernel                      force kernel rebuild even if outputs exist

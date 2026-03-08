@@ -177,6 +177,19 @@ def run_in_builder(cfg: Config, *extra_args: str) -> None:
         docker_args.extend(["-v", f"{kernel_src_path}:/work/kernel-src:ro"])
         docker_args.extend(["-e", "KERNEL_SRC=/work/kernel-src"])
 
+    # Mount kernel config override and point KERNEL_CONFIG to the container path
+    if cfg.kernel_config is not None:
+        kernel_cfg_path = Path(cfg.kernel_config)
+        if not kernel_cfg_path.is_absolute():
+            kernel_cfg_path = (cfg.project_dir / kernel_cfg_path).resolve()
+        else:
+            kernel_cfg_path = kernel_cfg_path.resolve()
+        if not kernel_cfg_path.is_file():
+            err(f"KERNEL_CONFIG={cfg.kernel_config} does not exist")
+            raise SystemExit(1)
+        docker_args.extend(["-v", f"{kernel_cfg_path}:/work/kernel-config:ro"])
+        docker_args.extend(["-e", "KERNEL_CONFIG=/work/kernel-config"])
+
     docker_args.extend(extra_args)
     run(docker_args)
 

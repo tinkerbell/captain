@@ -32,18 +32,18 @@ def _human_size(size: int) -> str:
 
 
 def collect_kernel(cfg: Config, logger: StageLogger | None = None) -> None:
-    """Copy the kernel image from mkosi.output/vmlinuz/{arch}/ to out/."""
+    """Copy the kernel image from mkosi.output/kernel/{version}/{arch}/ to out/."""
     _log = logger or _default_log
     out = ensure_dir(cfg.output_dir)
-    vmlinuz_dir = cfg.vmlinuz_output
+    vmlinuz_dir = cfg.kernel_output
     vmlinuz_files = sorted(vmlinuz_dir.glob("vmlinuz-*")) if vmlinuz_dir.is_dir() else []
     if vmlinuz_files:
         vmlinuz_src = vmlinuz_files[0]
-        vmlinuz_dst = out / f"vmlinuz-{cfg.arch}"
+        vmlinuz_dst = out / f"vmlinuz-{cfg.kernel_version}-{cfg.arch}"
         shutil.copy2(vmlinuz_src, vmlinuz_dst)
         _log.log(f"kernel: {vmlinuz_dst} ({_human_size(vmlinuz_dst.stat().st_size)})")
     else:
-        _log.warn("No kernel image found in mkosi.output/vmlinuz/{arch}/")
+        _log.warn(f"No kernel image found in {cfg.kernel_output}")
 
 
 def collect_initramfs(cfg: Config, logger: StageLogger | None = None) -> None:
@@ -53,11 +53,11 @@ def collect_initramfs(cfg: Config, logger: StageLogger | None = None) -> None:
     cpio_files = sorted(cfg.initramfs_output.glob("*.cpio*"))
     if cpio_files:
         initrd_src = cpio_files[0]
-        initrd_dst = out / f"initramfs-{cfg.arch}.cpio.zst"
+        initrd_dst = out / f"initramfs-{cfg.kernel_version}-{cfg.arch}.cpio.zst"
         shutil.copy2(initrd_src, initrd_dst)
         _log.log(f"initramfs: {initrd_dst} ({_human_size(initrd_dst.stat().st_size)})")
     else:
-        _log.warn("No initramfs CPIO found in mkosi.output/initramfs/{arch}/")
+        _log.warn(f"No initramfs CPIO found in {cfg.initramfs_output}")
 
 
 def collect_iso(cfg: Config, logger: StageLogger | None = None) -> None:
@@ -68,7 +68,7 @@ def collect_iso(cfg: Config, logger: StageLogger | None = None) -> None:
     iso_files = sorted(iso_dir.glob("*.iso")) if iso_dir.is_dir() else []
     if iso_files:
         iso_src = iso_files[0]
-        iso_dst = out / f"captainos-{cfg.arch}.iso"
+        iso_dst = out / f"captainos-{cfg.kernel_version}-{cfg.arch}.iso"
         shutil.copy2(iso_src, iso_dst)
         _log.log(f"iso: {iso_dst} ({_human_size(iso_dst.stat().st_size)})")
 

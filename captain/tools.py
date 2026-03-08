@@ -30,7 +30,7 @@ class ToolSpec:
     version: str
     # URL template — {version} and {arch} will be substituted
     url_template: str
-    # Destination directory relative to mkosi.output/extra-tree/{arch}/
+    # Destination directory relative to mkosi.output/tools/{arch}/
     dest: str
     # Members to extract from tarball (None = single binary download)
     members: list[str] | None = None
@@ -158,9 +158,9 @@ def download_tool(tool: ToolSpec, arch: str, output_base: Path, force: bool) -> 
 
 
 def download_all(cfg: Config) -> None:
-    """Download all tools into mkosi.output/extra-tree/{arch}/."""
+    """Download all tools into mkosi.output/tools/{arch}/."""
     arch = cfg.arch_info.dl_arch
-    output_base = cfg.extra_tree_output
+    output_base = cfg.tools_output
 
     for tool in TOOLS:
         download_tool(tool, arch, output_base, cfg.force_tools)

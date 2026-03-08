@@ -57,8 +57,8 @@ class _HelpFormatter(argparse.RawDescriptionHelpFormatter):
 
 
 from captain import artifacts, docker, iso, kernel, oci, qemu, tools  # noqa: E402
-from captain.config import Config  # noqa: E402
-from captain.log import for_stage  # noqa: E402
+from captain.config import DEFAULT_KERNEL_VERSION, Config  # noqa: E402
+from captain.log import StageLogger, for_stage  # noqa: E402
 from captain.util import (  # noqa: E402
     check_kernel_dependencies,
     check_mkosi_dependencies,
@@ -79,7 +79,7 @@ COMMANDS: dict[str, str] = {
     "checksums": "Compute SHA-256 checksums for specified files",
     "release": "OCI artifact operations (publish, pull, tag)",
     "shell": "Interactive shell inside the builder container",
-    "clean": "Remove all build artifacts",
+    "clean": "Remove build artifacts (per kernel version or all)",
     "summary": "Print mkosi configuration summary",
     "qemu-test": "Boot the image in QEMU for testing",
 }
@@ -90,6 +90,7 @@ VALID_MODES = ("docker", "native", "skip")
 # Used by _extract_command to avoid treating a flag value as a subcommand.
 _BOOLEAN_FLAGS = frozenset(
     {
+        "--all",
         "--force-kernel",
         "--force-tools",
         "--force-iso",
@@ -227,8 +228,15 @@ def _add_kernel_flags(parser: configargparse.ArgParser) -> None:
         "--kernel-version",
         env_var="KERNEL_VERSION",
         metavar="VER",
-        default="6.12.69",
+        default=DEFAULT_KERNEL_VERSION,
         help="kernel version to build",
+    )
+    g.add_argument(
+        "--kernel-config",
+        env_var="KERNEL_CONFIG",
+        metavar="PATH",
+        default=None,
+        help="path to kernel config file (overrides auto-detection from kernel.configs/)",
     )
     g.add_argument(
         "--kernel-src",
@@ -332,6 +340,19 @@ def _add_mode_flags(parser: configargparse.ArgParser) -> None:
             choices=list(VALID_MODES),
             help=f"{stage} stage execution mode",
         )
+
+
+def _add_clean_flags(parser: configargparse.ArgParser) -> None:
+    """--all flag for the clean command."""
+    g = parser.add_argument_group("clean")
+    g.add_argument(
+        "--all",
+        env_var="CLEAN_ALL",
+        action="store_true",
+        default=False,
+        dest="clean_all",
+        help="remove ALL build artifacts instead of just the selected kernel version",
+    )
 
 
 def _add_checksums_flags(parser: configargparse.ArgParser) -> None:
@@ -575,14 +596,14 @@ _COMMAND_FLAGS: dict[str, list[Callable[..., None]]] = {
     ],
     "kernel": [_add_common_flags, _add_kernel_flags],
     "tools": [_add_common_flags, _add_tools_flags],
-    "initramfs": [_add_common_flags, _add_mkosi_flags],
-    "iso": [_add_common_flags, _add_iso_flags],
-    "checksums": [_add_common_flags, _add_checksums_flags],
-    "release": [_add_common_flags, _add_release_flags],
+    "initramfs": [_add_common_flags, _add_kernel_flags, _add_mkosi_flags],
+    "iso": [_add_common_flags, _add_kernel_flags, _add_iso_flags],
+    "checksums": [_add_common_flags, _add_kernel_flags, _add_checksums_flags],
+    "release": [_add_common_flags, _add_kernel_flags, _add_release_flags],
     "shell": [_add_common_flags],
-    "clean": [],
-    "summary": [_add_common_flags, _add_summary_flags],
-    "qemu-test": [_add_common_flags, _add_qemu_flags, _add_tink_flags],
+    "clean": [_add_common_flags, _add_kernel_flags, _add_clean_flags],
+    "summary": [_add_common_flags, _add_kernel_flags, _add_summary_flags],
+    "qemu-test": [_add_common_flags, _add_kernel_flags, _add_qemu_flags, _add_tink_flags],
 }
 
 
@@ -601,8 +622,8 @@ def _build_kernel_stage(cfg: Config) -> None:
         return
 
     # --- idempotency --------------------------------------------------
-    modules_dir = cfg.extra_tree_output / "usr" / "lib" / "modules"
-    vmlinuz_dir = cfg.vmlinuz_output
+    modules_dir = cfg.modules_output / "usr" / "lib" / "modules"
+    vmlinuz_dir = cfg.kernel_output
     has_vmlinuz = vmlinuz_dir.is_dir() and any(vmlinuz_dir.glob("vmlinuz-*"))
 
     if modules_dir.is_dir() and has_vmlinuz and not cfg.force_kernel:
@@ -638,8 +659,7 @@ def _build_kernel_stage(cfg: Config) -> None:
         cfg,
         klog,
         [
-            f"/work/mkosi.output/extra-tree/{cfg.arch}",
-            f"/work/mkosi.output/vmlinuz/{cfg.arch}",
+            f"/work/mkosi.output/kernel/{cfg.kernel_version}/{cfg.arch}",
             "/work/out",
         ],
     )
@@ -693,13 +713,15 @@ def _build_mkosi_stage(cfg: Config, extra_args: list[str]) -> None:
             ilog.err("Install them or set --mkosi-mode=docker.")
             raise SystemExit(1)
         ilog.log("Building initrd with mkosi (native)...")
-        extra_tree = str(cfg.extra_tree_output)
+        tools_tree = str(cfg.tools_output)
+        modules_tree = str(cfg.modules_output)
         output_dir = str(cfg.initramfs_output)
         run(
             [
                 "mkosi",
                 f"--architecture={cfg.arch_info.mkosi_arch}",
-                f"--extra-tree={extra_tree}",
+                f"--extra-tree={tools_tree}",
+                f"--extra-tree={modules_tree}",
                 f"--output-dir={output_dir}",
                 "build",
                 *mkosi_args,
@@ -711,11 +733,13 @@ def _build_mkosi_stage(cfg: Config, extra_args: list[str]) -> None:
     # --- docker -------------------------------------------------------
     docker.build_builder(cfg, logger=ilog)
     ilog.log("Building initrd with mkosi (docker)...")
-    extra_tree = f"/work/mkosi.output/extra-tree/{cfg.arch}"
-    output_dir = f"/work/mkosi.output/initramfs/{cfg.arch}"
+    tools_tree = f"/work/mkosi.output/tools/{cfg.arch}"
+    modules_tree = f"/work/mkosi.output/kernel/{cfg.kernel_version}/{cfg.arch}/modules"
+    output_dir = f"/work/mkosi.output/initramfs/{cfg.kernel_version}/{cfg.arch}"
     docker.run_mkosi(
         cfg,
-        f"--extra-tree={extra_tree}",
+        f"--extra-tree={tools_tree}",
+        f"--extra-tree={modules_tree}",
         f"--output-dir={output_dir}",
         "build",
         *mkosi_args,
@@ -725,7 +749,7 @@ def _build_mkosi_stage(cfg: Config, extra_args: list[str]) -> None:
         cfg,
         ilog,
         [
-            f"/work/mkosi.output/initramfs/{cfg.arch}",
+            f"/work/mkosi.output/initramfs/{cfg.kernel_version}/{cfg.arch}",
             "/work/out",
         ],
     )
@@ -741,7 +765,7 @@ def _build_iso_stage(cfg: Config) -> None:
         return
 
     # --- idempotency --------------------------------------------------
-    iso_path = cfg.iso_output / f"captainos-{cfg.arch}.iso"
+    iso_path = cfg.iso_output / f"captainos-{cfg.kernel_version}-{cfg.arch}.iso"
     if iso_path.is_file() and not cfg.force_iso:
         isolog.log(f"ISO already built: {iso_path} (use --force-iso to rebuild)")
         return
@@ -804,7 +828,7 @@ def _check_kernel_modules(cfg: Config) -> None:
     producing an initramfs without modules.
     """
     ilog = for_stage("initramfs")
-    modules_dir = cfg.extra_tree_output / "usr" / "lib" / "modules"
+    modules_dir = cfg.modules_output / "usr" / "lib" / "modules"
     if not modules_dir.is_dir():
         ilog.err(f"Kernel modules directory not found: {modules_dir}")
         ilog.err("Ensure the kernel build artifacts are downloaded correctly.")
@@ -862,10 +886,76 @@ def _cmd_shell(cfg: Config, _extra_args: list[str]) -> None:
     docker.run_in_builder(cfg, "-it", "--entrypoint", "/bin/bash", cfg.builder_image)
 
 
-def _cmd_clean(cfg: Config, _extra_args: list[str]) -> None:
-    """Remove all build artifacts."""
+def _cmd_clean(cfg: Config, _extra_args: list[str], args: object = None) -> None:
+    """Remove build artifacts for the selected kernel version, or all."""
     clog = for_stage("clean")
-    clog.log("Cleaning build artifacts...")
+    clean_all = getattr(args, "clean_all", False)
+
+    if clean_all:
+        _clean_all(cfg, clog)
+    else:
+        _clean_version(cfg, clog)
+
+
+def _clean_version(cfg: Config, clog: StageLogger) -> None:
+    """Remove build artifacts for a single kernel version."""
+    kver = cfg.kernel_version
+    clog.log(f"Cleaning build artifacts for kernel {kver} ({cfg.arch})...")
+    mkosi_output = cfg.mkosi_output
+
+    # Version-specific directories under mkosi.output/{stage}/{version}/{arch}
+    version_dirs = [
+        mkosi_output / "kernel" / kver / cfg.arch,
+        mkosi_output / "initramfs" / kver / cfg.arch,
+        mkosi_output / "iso" / kver / cfg.arch,
+        mkosi_output / "iso-staging" / kver / cfg.arch,
+    ]
+
+    has_docker = shutil.which("docker") is not None
+    existing = [d for d in version_dirs if d.exists()]
+    if existing and has_docker:
+        # Use Docker to remove root-owned files from mkosi.
+        # Invoke rm directly (no shell) to avoid injection via path components.
+        container_path_args = [
+            f"/work/mkosi.output/{d.relative_to(mkosi_output)}" for d in existing
+        ]
+        run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                f"{cfg.project_dir}:/work",
+                "-w",
+                "/work",
+                "debian:trixie",
+                "rm",
+                "-rf",
+                "--",
+                *container_path_args,
+            ],
+        )
+    elif existing:
+        for d in existing:
+            shutil.rmtree(d, ignore_errors=True)
+
+    # Remove versioned artifacts from out/
+    if cfg.output_dir.exists():
+        for pattern in (
+            f"vmlinuz-{kver}-*",
+            f"initramfs-{kver}-*",
+            f"captainos-{kver}-*",
+            f"sha256sums-{kver}-*",
+        ):
+            for p in cfg.output_dir.glob(pattern):
+                p.unlink(missing_ok=True)
+
+    clog.log(f"Clean complete for kernel {kver}.")
+
+
+def _clean_all(cfg: Config, clog: StageLogger) -> None:
+    """Remove all build artifacts (all kernel versions)."""
+    clog.log("Cleaning ALL build artifacts...")
     mkosi_output = cfg.mkosi_output
     mkosi_cache = cfg.project_dir / "mkosi.cache"
 
@@ -887,8 +977,8 @@ def _cmd_clean(cfg: Config, _extra_args: list[str]) -> None:
                     "-c",
                     "rm -rf /work/mkosi.output/image*"
                     " /work/mkosi.output/initramfs"
-                    " /work/mkosi.output/vmlinuz"
-                    " /work/mkosi.output/extra-tree"
+                    " /work/mkosi.output/kernel"
+                    " /work/mkosi.output/tools"
                     " /work/mkosi.output/iso"
                     " /work/mkosi.output/iso-staging"
                     " /work/mkosi.cache",
@@ -896,7 +986,7 @@ def _cmd_clean(cfg: Config, _extra_args: list[str]) -> None:
             )
     else:
         # No Docker available — remove directly (may need sudo for root-owned mkosi files)
-        for pattern in ("image*", "initramfs", "vmlinuz", "extra-tree", "iso", "iso-staging"):
+        for pattern in ("image*", "initramfs", "kernel", "tools", "iso", "iso-staging"):
             for p in mkosi_output.glob(pattern):
                 if p.is_dir():
                     shutil.rmtree(p, ignore_errors=True)
@@ -913,16 +1003,19 @@ def _cmd_clean(cfg: Config, _extra_args: list[str]) -> None:
 def _cmd_summary(cfg: Config, _extra_args: list[str]) -> None:
     """Print mkosi configuration summary."""
     slog = for_stage("summary")
-    extra_tree = str(cfg.extra_tree_output)
+    tools_tree = str(cfg.tools_output)
+    modules_tree = str(cfg.modules_output)
     output_dir = str(cfg.initramfs_output)
     match cfg.mkosi_mode:
         case "docker":
             docker.build_builder(cfg, logger=slog)
-            container_tree = f"/work/mkosi.output/extra-tree/{cfg.arch}"
-            container_outdir = f"/work/mkosi.output/initramfs/{cfg.arch}"
+            container_tree = f"/work/mkosi.output/tools/{cfg.arch}"
+            container_modules = f"/work/mkosi.output/kernel/{cfg.kernel_version}/{cfg.arch}/modules"
+            container_outdir = f"/work/mkosi.output/initramfs/{cfg.kernel_version}/{cfg.arch}"
             docker.run_mkosi(
                 cfg,
                 f"--extra-tree={container_tree}",
+                f"--extra-tree={container_modules}",
                 f"--output-dir={container_outdir}",
                 "summary",
                 logger=slog,
@@ -932,7 +1025,8 @@ def _cmd_summary(cfg: Config, _extra_args: list[str]) -> None:
                 [
                     "mkosi",
                     f"--architecture={cfg.arch_info.mkosi_arch}",
-                    f"--extra-tree={extra_tree}",
+                    f"--extra-tree={tools_tree}",
+                    f"--extra-tree={modules_tree}",
                     f"--output-dir={output_dir}",
                     "summary",
                 ],
@@ -963,16 +1057,17 @@ def _cmd_checksums(cfg: Config, _extra_args: list[str], args: object = None) -> 
         # Default mode: produce checksums for the selected architecture.
         out = cfg.output_dir
         arch = cfg.arch
+        kver = cfg.kernel_version
         arch_files = [
-            out / f"vmlinuz-{arch}",
-            out / f"initramfs-{arch}.cpio.zst",
-            out / f"captainos-{arch}.iso",
+            out / f"vmlinuz-{kver}-{arch}",
+            out / f"initramfs-{kver}-{arch}.cpio.zst",
+            out / f"captainos-{kver}-{arch}.iso",
         ]
         existing = [f for f in arch_files if f.is_file()]
         if not existing:
-            clog.err(f"No artifacts found for {arch} in {out}")
+            clog.err(f"No artifacts found for {kver}-{arch} in {out}")
             raise SystemExit(1)
-        dest = Path(output) if output else out / f"sha256sums-{arch}.txt"
+        dest = Path(output) if output else out / f"sha256sums-{kver}-{arch}.txt"
         artifacts.collect_checksums(existing, dest, logger=clog)
     clog.log("Checksums complete!")
 
@@ -982,12 +1077,13 @@ _RELEASE_SUBCOMMANDS = ("publish", "pull", "tag")
 _RELEASE_SUBCMD_INFO: dict[str, tuple[str, list]] = {
     "publish": (
         "Publish artifacts as a multi-arch OCI image",
-        [_add_common_flags, _add_release_base_flags, _add_release_target_flag],
+        [_add_common_flags, _add_kernel_flags, _add_release_base_flags, _add_release_target_flag],
     ),
     "pull": (
         "Pull and extract artifacts (amd64, arm64, or combined)",
         [
             _add_common_flags,
+            _add_kernel_flags,
             _add_release_base_flags,
             _add_release_target_flag,
             _add_release_pull_output,
@@ -995,7 +1091,7 @@ _RELEASE_SUBCMD_INFO: dict[str, tuple[str, list]] = {
     ),
     "tag": (
         "Tag all artifact images with a version",
-        [_add_common_flags, _add_release_base_flags, _add_release_tag_version],
+        [_add_common_flags, _add_kernel_flags, _add_release_base_flags, _add_release_tag_version],
     ),
 }
 
@@ -1084,6 +1180,8 @@ def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> Non
         artifact_name = getattr(args, "oci_artifact_name", "artifacts")
         sha = _resolve_git_sha(args, cfg.project_dir)
         env_args: list[str] = [
+            "-e",
+            f"KERNEL_VERSION={cfg.kernel_version}",
             "-e",
             f"REGISTRY={registry}",
             "-e",
@@ -1249,7 +1347,7 @@ def main(project_dir: Path | None = None) -> None:
 
     handler = dispatch.get(command)
     if handler is not None:
-        if command in ("qemu-test", "checksums", "release"):
+        if command in ("qemu-test", "checksums", "release", "clean"):
             handler(cfg, extra, args=args)  # type: ignore[operator]
         else:
             handler(cfg, extra)  # type: ignore[operator]
@@ -1257,16 +1355,21 @@ def main(project_dir: Path | None = None) -> None:
         # Pass through to mkosi (shouldn't happen with _extract_command
         # but kept as a safety net).
         mlog = for_stage("mkosi")
-        extra_tree = str(cfg.extra_tree_output)
+        tools_tree = str(cfg.tools_output)
+        modules_tree = str(cfg.modules_output)
         output_dir = str(cfg.initramfs_output)
         match cfg.mkosi_mode:
             case "docker":
                 docker.build_builder(cfg, logger=mlog)
-                container_tree = f"/work/mkosi.output/extra-tree/{cfg.arch}"
-                container_outdir = f"/work/mkosi.output/initramfs/{cfg.arch}"
+                container_tree = f"/work/mkosi.output/tools/{cfg.arch}"
+                container_modules = (
+                    f"/work/mkosi.output/kernel/{cfg.kernel_version}/{cfg.arch}/modules"
+                )
+                container_outdir = f"/work/mkosi.output/initramfs/{cfg.kernel_version}/{cfg.arch}"
                 docker.run_mkosi(
                     cfg,
                     f"--extra-tree={container_tree}",
+                    f"--extra-tree={container_modules}",
                     f"--output-dir={container_outdir}",
                     command,
                     *extra,
@@ -1277,7 +1380,8 @@ def main(project_dir: Path | None = None) -> None:
                     [
                         "mkosi",
                         f"--architecture={cfg.arch_info.mkosi_arch}",
-                        f"--extra-tree={extra_tree}",
+                        f"--extra-tree={tools_tree}",
+                        f"--extra-tree={modules_tree}",
                         f"--output-dir={output_dir}",
                         command,
                         *extra,

@@ -5,12 +5,12 @@ on:
       - "main"
   pull_request:
 
-env:
-  KERNEL_VERSION: "6.12.69"
-
 permissions:
   contents: read
   packages: write
+
+env:
+  KERNEL_VERSION: 6.18.16
 
 jobs:
   # -------------------------------------------------------------------
@@ -52,9 +52,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            mkosi.output/extra-tree/amd64/usr/lib/modules
-            mkosi.output/vmlinuz/amd64
-          key: kernel-amd64-${{ env.KERNEL_VERSION }}-${{ hashFiles('config/defconfig.*', 'Dockerfile') }}
+            mkosi.output/kernel/${{ env.KERNEL_VERSION }}/amd64
+          key: kernel-amd64-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.configs/*', 'Dockerfile') }}
           lookup-only: true
 
       - name: Check arm64 kernel cache
@@ -62,9 +61,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            mkosi.output/extra-tree/arm64/usr/lib/modules
-            mkosi.output/vmlinuz/arm64
-          key: kernel-arm64-${{ env.KERNEL_VERSION }}-${{ hashFiles('config/defconfig.*', 'Dockerfile') }}
+            mkosi.output/kernel/${{ env.KERNEL_VERSION }}/arm64
+          key: kernel-arm64-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.configs/*', 'Dockerfile') }}
           lookup-only: true
 
   # -------------------------------------------------------------------
@@ -137,9 +135,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            mkosi.output/extra-tree/${{ matrix.arch }}/usr/lib/modules
-            mkosi.output/vmlinuz/${{ matrix.arch }}
-          key: kernel-${{ matrix.arch }}-${{ env.KERNEL_VERSION }}-${{ hashFiles('config/defconfig.*', 'Dockerfile') }}
+            mkosi.output/kernel/${{ env.KERNEL_VERSION }}/${{ matrix.arch }}
+          key: kernel-${{ matrix.arch }}-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.configs/*', 'Dockerfile') }}
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
@@ -155,17 +152,15 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            mkosi.output/extra-tree/${{ matrix.arch }}/usr/lib/modules
-            mkosi.output/vmlinuz/${{ matrix.arch }}
-          key: kernel-${{ matrix.arch }}-${{ env.KERNEL_VERSION }}-${{ hashFiles('config/defconfig.*', 'Dockerfile') }}
+            mkosi.output/kernel/${{ env.KERNEL_VERSION }}/${{ matrix.arch }}
+          key: kernel-${{ matrix.arch }}-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.configs/*', 'Dockerfile') }}
 
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ matrix.arch }}
           path: |
-            mkosi.output/extra-tree/${{ matrix.arch }}/usr/lib/modules
-            mkosi.output/vmlinuz/${{ matrix.arch }}
+            mkosi.output/kernel/${{ env.KERNEL_VERSION }}/${{ matrix.arch }}
           retention-days: 1
 
   # -------------------------------------------------------------------
@@ -192,8 +187,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: |
-            mkosi.output/extra-tree/${{ matrix.arch }}/usr/local/bin
-            mkosi.output/extra-tree/${{ matrix.arch }}/opt/cni
+            mkosi.output/tools/${{ matrix.arch }}/usr/local/bin
+            mkosi.output/tools/${{ matrix.arch }}/opt/cni
           key: tools-${{ matrix.arch }}-${{ hashFiles('captain/tools.py') }}
 
       - name: Install Python dependencies
@@ -207,8 +202,8 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: |
-            mkosi.output/extra-tree/${{ matrix.arch }}/usr/local/bin
-            mkosi.output/extra-tree/${{ matrix.arch }}/opt/cni
+            mkosi.output/tools/${{ matrix.arch }}/usr/local/bin
+            mkosi.output/tools/${{ matrix.arch }}/opt/cni
           key: tools-${{ matrix.arch }}-${{ hashFiles('captain/tools.py') }}
 
       - name: Upload tools artifacts
@@ -216,8 +211,8 @@ jobs:
         with:
           name: tools-${{ matrix.arch }}
           path: |
-            mkosi.output/extra-tree/${{ matrix.arch }}/usr/local/bin
-            mkosi.output/extra-tree/${{ matrix.arch }}/opt/cni
+            mkosi.output/tools/${{ matrix.arch }}/usr/local/bin
+            mkosi.output/tools/${{ matrix.arch }}/opt/cni
           retention-days: 1
 
   # -------------------------------------------------------------------
@@ -242,13 +237,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: kernel-${{ matrix.arch }}
-          path: mkosi.output
+          path: mkosi.output/kernel/${{ env.KERNEL_VERSION }}/${{ matrix.arch }}
 
       - name: Download tools artifacts
         uses: actions/download-artifact@v4
         with:
           name: tools-${{ matrix.arch }}
-          path: mkosi.output/extra-tree/${{ matrix.arch }}
+          path: mkosi.output/tools/${{ matrix.arch }}
 
       - name: Refresh apt cache
         run: sudo apt-get update
@@ -333,7 +328,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: kernel-${{ matrix.arch }}
-          path: mkosi.output
+          path: mkosi.output/kernel/${{ env.KERNEL_VERSION }}/${{ matrix.arch }}
 
       - name: Download initramfs artifacts
         uses: actions/download-artifact@v4
@@ -343,8 +338,9 @@ jobs:
 
       - name: Stage initramfs for ISO build
         run: |
-          mkdir -p mkosi.output/initramfs/${{ matrix.arch }}
-          cp out/initramfs-${{ matrix.arch }}.cpio.zst mkosi.output/initramfs/${{ matrix.arch }}/image.cpio.zst
+          mkdir -p "mkosi.output/initramfs/${KERNEL_VERSION}/${{ matrix.arch }}"
+          cp "out/initramfs-${KERNEL_VERSION}-${{ matrix.arch }}.cpio.zst" \
+             "mkosi.output/initramfs/${KERNEL_VERSION}/${{ matrix.arch }}/image.cpio.zst"
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
@@ -356,7 +352,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: iso-${{ matrix.arch }}
-          path: out/captainos-${{ matrix.arch }}.iso
+          path: out/captainos-${{ env.KERNEL_VERSION }}-${{ matrix.arch }}.iso
           retention-days: 1
 
   # -------------------------------------------------------------------
@@ -386,7 +382,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: kernel-${{ matrix.target }}
-          path: mkosi.output
+          path: mkosi.output/kernel/${{ env.KERNEL_VERSION }}/${{ matrix.target }}
 
       - name: Download initramfs artifacts
         uses: actions/download-artifact@v4
@@ -436,7 +432,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: kernel-amd64
-          path: mkosi.output
+          path: mkosi.output/kernel/${{ env.KERNEL_VERSION }}/amd64
 
       - name: Download initramfs artifacts (amd64)
         uses: actions/download-artifact@v4
@@ -454,7 +450,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: kernel-arm64
-          path: mkosi.output
+          path: mkosi.output/kernel/${{ env.KERNEL_VERSION }}/arm64
 
       - name: Download initramfs artifacts (arm64)
         uses: actions/download-artifact@v4

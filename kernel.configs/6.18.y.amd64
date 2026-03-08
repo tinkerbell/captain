@@ -1,9 +1,9 @@
 # CaptainOS kernel defconfig for x86_64
 # Comprehensive config for bare-metal provisioning with container/network support.
-# Derived from HookOS generic-6.6.y-x86_64 proven config, adapted for kernel 6.12.
+# Derived from HookOS generic-6.6.y-x86_64 proven config, adapted for kernel 6.18.
 #
 # Generate a full .config from this:
-#   cp defconfig.amd64 .config && make olddefconfig
+#   cp 6.18.y.amd64 .config && make olddefconfig
 
 # --- Architecture ---
 CONFIG_64BIT=y
