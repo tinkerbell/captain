@@ -10,6 +10,7 @@ from pathlib import Path
 
 from captain import artifacts, buildah
 from captain.log import StageLogger
+from captain.util import get_arch_info
 
 
 def _deterministic_tar(file_path: Path, output_dir: Path) -> Path:
@@ -47,7 +48,8 @@ def _collect_arch_artifacts(
     # Collect kernel
     vmlinuz_dir = project_dir / "mkosi.output" / "kernel" / kernel_version / arch
     vmlinuz_files = sorted(vmlinuz_dir.glob("vmlinuz-*")) if vmlinuz_dir.is_dir() else []
-    vmlinuz_dst = out / f"vmlinuz-{kernel_version}-{arch}"
+    oarch = get_arch_info(arch).output_arch
+    vmlinuz_dst = out / f"vmlinuz-{kernel_version}-{oarch}"
     if vmlinuz_files:
         shutil.copy2(vmlinuz_files[0], vmlinuz_dst)
         logger.log(f"kernel: {vmlinuz_dst}")
@@ -55,11 +57,11 @@ def _collect_arch_artifacts(
         logger.warn(f"No kernel image found for {arch}")
 
     arch_files = [
-        out / f"vmlinuz-{kernel_version}-{arch}",
-        out / f"initramfs-{kernel_version}-{arch}.cpio.zst",
-        out / f"captainos-{kernel_version}-{arch}.iso",
+        out / f"vmlinuz-{kernel_version}-{oarch}",
+        out / f"initramfs-{kernel_version}-{oarch}",
+        out / f"captainos-{kernel_version}-{oarch}.iso",
     ]
-    checksums_path = out / f"sha256sums-{kernel_version}-{arch}.txt"
+    checksums_path = out / f"sha256sums-{kernel_version}-{oarch}.txt"
     artifacts.collect_checksums(arch_files, checksums_path, logger=logger)
 
     push_files = [*arch_files, checksums_path]

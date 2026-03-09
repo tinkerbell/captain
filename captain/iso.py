@@ -34,7 +34,7 @@ def _grub_cfg(arch: str) -> str:
 
         menuentry "CaptainOS" {{
             linux /boot/vmlinuz {console} 464vn90e7rbj08xbwdjejmdf4it17c5zfzjyfhthbh19eij201hjgit021bmpdb9ctrc87x2ymc8e7icu4ffi15x1hah9iyaiz38ckyap8hwx2vt5rm44ixv4hau8iw718q5yd019um5dt2xpqqa2rjtdypzr5v1gun8un110hhwp8cex7pqrh2ivh0ynpm4zkkwc8wcn367zyethzy7q8hzudyeyzx3cgmxqbkh825gcak7kxzjbgjajwizryv7ec1xm2h0hh7pz29qmvtgfjj1vphpgq1zcbiiehv52wrjy9yq473d9t1rvryy6929nk435hfx55du3ih05kn5tju3vijreru1p6knc988d4gfdz28eragvryq5x8aibe5trxd0t6t7jwxkde34v6pj1khmp50k6qqj3nzgcfzabtgqkmeqhdedbvwf3byfdma4nkv3rcxugaj2d0ru30pa2fqadjqrtjnv8bu52xzxv7irbhyvygygxu1nt5z4fh9w1vwbdcmagep26d298zknykf2e88kumt59ab7nq79d8amnhhvbexgh48e8qc61vq2e9qkihzt1twk1ijfgw70nwizai15iqyted2dt9gfmf2gg7amzufre79hwqkddc1cd935ywacnkrnak6r7xzcz7zbmq3kt04u2hg1iuupid8rt4nyrju51e6uejb2ruu36g9aibmz3hnmvazptu8x5tyxk820g2cdpxjdij766bt2n3djur7v623a2v44juyfgz80ekgfb9hkibpxh3zgknw8a34t4jifhf116x15cei9hwch0fye3xyq0acuym8uhitu5evc4rag3ui0fny3qg4kju7zkfyy8hwh537urd5uixkzwu5bdvafz4jmv7imypj543xg5em8jk8cgk7c4504xdd5e4e71ihaumt6u5u2t1w7um92fepzae8p0vq93wdrd1756npu1pziiur1payc7kmdwyxg3hj5n4phxbc29x0tcddamjrwt260b0w
-            initrd /boot/initramfs.cpio.zst
+            initrd /boot/initramfs
         }}
     """)
 
@@ -70,7 +70,7 @@ def build(cfg: Config) -> None:
         │   ├── grub/
         │   │   └── grub.cfg
         │   ├── vmlinuz
-        │   └── initramfs.cpio.zst
+        │   └── initramfs
 
     ``grub-mkrescue`` turns this into a bootable ISO with an embedded
     EFI System Partition.
@@ -95,14 +95,14 @@ def build(cfg: Config) -> None:
 
     # Copy kernel and initramfs
     shutil.copy2(vmlinuz, boot_dir / "vmlinuz")
-    shutil.copy2(initramfs, boot_dir / "initramfs.cpio.zst")
+    shutil.copy2(initramfs, boot_dir / "initramfs")
 
     # Write GRUB configuration
     (grub_dir / "grub.cfg").write_text(_grub_cfg(cfg.arch))
 
     # Build the ISO
     iso_dir = ensure_dir(cfg.iso_output)
-    iso_path = iso_dir / f"captainos-{cfg.kernel_version}-{cfg.arch}.iso"
+    iso_path = iso_dir / f"captainos-{cfg.kernel_version}-{cfg.arch_info.output_arch}.iso"
 
     _log.log(f"Building ISO with grub-mkrescue ({grub_platform})...")
     grub_mkrescue = shutil.which("grub-mkrescue")

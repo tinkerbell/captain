@@ -65,8 +65,8 @@ def run_qemu(cfg: Config, args: argparse.Namespace | None = None) -> None:
     :mod:`configargparse`.  When provided, Tinkerbell kernel cmdline
     parameters are drawn from it instead of the environment.
     """
-    kernel = cfg.output_dir / f"vmlinuz-{cfg.kernel_version}-{cfg.arch}"
-    initrd = cfg.output_dir / f"initramfs-{cfg.kernel_version}-{cfg.arch}.cpio.zst"
+    kernel = cfg.output_dir / f"vmlinuz-{cfg.kernel_version}-{cfg.arch_info.output_arch}"
+    initrd = cfg.output_dir / f"initramfs-{cfg.kernel_version}-{cfg.arch_info.output_arch}"
 
     missing: list[str] = []
     if not kernel.is_file():

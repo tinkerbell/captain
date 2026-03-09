@@ -167,7 +167,7 @@ def download_all(cfg: Config) -> None:
 
     _log.log("Tool download complete.")
 
-    # NOTE: UPX compression is not used. The final image is cpio.zst, and zstd
-    # compresses raw ELF binaries better than UPX-packed ones (UPX output looks
-    # like random data to zstd, defeating its compression).
+    # NOTE: UPX compression is not used. The initramfs is a zstd-compressed
+    # CPIO archive, and zstd compresses raw ELF binaries better than UPX-packed
+    # ones (UPX output looks like random data to zstd, defeating its compression).
     _log.log("All tools ready.")

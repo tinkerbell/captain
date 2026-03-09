@@ -17,6 +17,7 @@ class ArchInfo:
     """Architecture-specific build parameters."""
 
     arch: str  # canonical name: amd64 | arm64
+    output_arch: str  # user-facing name in artifact filenames: x86_64 | aarch64
     kernel_arch: str  # kernel ARCH value
     cross_compile: str  # CROSS_COMPILE prefix (empty for native)
     image_target: str  # kernel image make target
@@ -33,6 +34,7 @@ def get_arch_info(arch: str) -> ArchInfo:
         case "amd64" | "x86_64":
             return ArchInfo(
                 arch="amd64",
+                output_arch="x86_64",
                 kernel_arch="x86_64",
                 cross_compile="",
                 image_target="bzImage",
@@ -45,6 +47,7 @@ def get_arch_info(arch: str) -> ArchInfo:
         case "arm64" | "aarch64":
             return ArchInfo(
                 arch="arm64",
+                output_arch="aarch64",
                 kernel_arch="arm64",
                 cross_compile="aarch64-linux-gnu-",
                 image_target="Image",
