@@ -16,7 +16,7 @@ It is built with [mkosi](https://github.com/systemd/mkosi), producing a minimal 
 
 ## How it works
 
-1. The machine PXE boots the kernel (`vmlinuz`) and initramfs (`initramfs.cpio.zst`) or runs the UEFI-bootable ISO image
+1. The machine PXE boots the kernel (`vmlinuz`) and initramfs (`initramfs`) or runs the UEFI-bootable ISO image
 2. A custom `/init` script transitions the rootfs to tmpfs, then exec's systemd
 3. systemd-networkd configures DHCP on all ethernet interfaces
 4. containerd starts, then `tink-agent-setup` pulls the tink-agent container image (configured via kernel cmdline), extracts the binary, and runs it as a host process
@@ -87,10 +87,12 @@ commands:
 
 Output artifacts are placed in `out/`:
 
-- `out/initramfs-<arch>.cpio.zst` — the initramfs
-- `out/vmlinuz-<arch>` — the kernel
-- `out/captainos-<arch>.iso` — UEFI-bootable ISO image
-- `out/sha256sums-<arch>.txt` — SHA-256 checksums
+- `out/vmlinuz-<kver>-<arch>` — the kernel
+- `out/initramfs-<kver>-<arch>` — the initramfs
+- `out/captainos-<kver>-<arch>.iso` — UEFI-bootable ISO image
+- `out/sha256sums-<kver>-<arch>.txt` — SHA-256 checksums
+
+Here `<kver>` is the kernel version (e.g. `6.18.16`) and `<arch>` is the Linux architecture name (`x86_64` or `aarch64`).
 
 ## Release
 
@@ -102,8 +104,8 @@ Three multi-arch OCI indexes are published per build:
 
 | Image | Tag | Contents |
 | --- | --- | --- |
-| amd64-only | `vX.Y.Z-<sha7>-amd64` | vmlinuz, initramfs, ISO, checksums (amd64) |
-| arm64-only | `vX.Y.Z-<sha7>-arm64` | vmlinuz, initramfs, ISO, checksums (arm64) |
+| amd64-only | `vX.Y.Z-<sha7>-amd64` | vmlinuz, initramfs, ISO, checksums (x86_64) |
+| arm64-only | `vX.Y.Z-<sha7>-arm64` | vmlinuz, initramfs, ISO, checksums (aarch64) |
 | combined | `vX.Y.Z-<sha7>` | all artifacts from both architectures |
 
 Each artifact file is pushed as its own OCI layer. Deterministic tar creation (zeroed metadata) ensures identical layer digests across per-arch and combined images, so registries deduplicate shared blobs — the combined image adds zero additional storage.
@@ -119,8 +121,8 @@ When a `v*` tag is pushed, the release workflow:
 
 1. Pulls the combined OCI image (both architectures)
 2. Attaches all artifacts as downloadable files on the GitHub Release page:
-   - `vmlinuz-amd64`, `initramfs-amd64.cpio.zst`, `captainos-amd64.iso`, `sha256sums-amd64.txt`
-   - `vmlinuz-arm64`, `initramfs-arm64.cpio.zst`, `captainos-arm64.iso`, `sha256sums-arm64.txt`
+   - `vmlinuz-<kver>-x86_64`, `initramfs-<kver>-x86_64`, `captainos-<kver>-x86_64.iso`, `sha256sums-<kver>-x86_64.txt`
+   - `vmlinuz-<kver>-aarch64`, `initramfs-<kver>-aarch64`, `captainos-<kver>-aarch64.iso`, `sha256sums-<kver>-aarch64.txt`
 3. Tags all three OCI images with the clean release version (`vX.Y.Z`, `vX.Y.Z-amd64`, `vX.Y.Z-arm64`)
 
 ### Release subcommands

@@ -161,7 +161,7 @@ def _build_iso_stage(cfg: Config) -> None:
         return
 
     # --- idempotency --------------------------------------------------
-    iso_path = cfg.iso_output / f"captainos-{cfg.kernel_version}-{cfg.arch}.iso"
+    iso_path = cfg.iso_output / f"captainos-{cfg.kernel_version}-{cfg.arch_info.output_arch}.iso"
     if iso_path.is_file() and not cfg.force_iso:
         isolog.log(f"ISO already built: {iso_path} (use --force-iso to rebuild)")
         return

@@ -18,7 +18,7 @@ The initial implementation (`b34c119`..`90e6f75`) used [ORAS](https://oras.land/
 oras push \
   --artifact-platform linux/$ARCH \
   ghcr.io/.../artifacts:$TAG \
-  vmlinuz-amd64 initramfs-amd64.cpio.zst captainos-amd64.iso ...
+  vmlinuz-x86_64 initramfs-x86_64 captainos-x86_64.iso ...
 ```
 
 **Problem:** `oras push` creates **OCI artifacts** (with an artifact manifest), not **OCI images**. Containerd cannot pull OCI artifacts because the layer count and `rootfs.diff_ids` in the config don't match — the image simply isn't a valid container image. This meant **Kubernetes image volumes didn't work**, which was a hard requirement.

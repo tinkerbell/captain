@@ -187,7 +187,7 @@ class Config:
 
     @property
     def initramfs_output(self) -> Path:
-        """Per-version, per-arch directory for mkosi initramfs output (image.cpio.zst)."""
+        """Per-version, per-arch directory for mkosi initramfs output."""
         return self.project_dir / "mkosi.output" / "initramfs" / self.kernel_version / self.arch
 
     @property

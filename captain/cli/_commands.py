@@ -271,18 +271,18 @@ def _cmd_checksums(cfg: Config, _extra_args: list[str], args: object = None) -> 
     else:
         # Default mode: produce checksums for the selected architecture.
         out = cfg.output_dir
-        arch = cfg.arch
+        oarch = cfg.arch_info.output_arch
         kver = cfg.kernel_version
         arch_files = [
-            out / f"vmlinuz-{kver}-{arch}",
-            out / f"initramfs-{kver}-{arch}.cpio.zst",
-            out / f"captainos-{kver}-{arch}.iso",
+            out / f"vmlinuz-{kver}-{oarch}",
+            out / f"initramfs-{kver}-{oarch}",
+            out / f"captainos-{kver}-{oarch}.iso",
         ]
         existing = [f for f in arch_files if f.is_file()]
         if not existing:
-            clog.err(f"No artifacts found for {kver}-{arch} in {out}")
+            clog.err(f"No artifacts found for {kver}-{oarch} in {out}")
             raise SystemExit(1)
-        dest = Path(output) if output else out / f"sha256sums-{kver}-{arch}.txt"
+        dest = Path(output) if output else out / f"sha256sums-{kver}-{oarch}.txt"
         artifacts.collect_checksums(existing, dest, logger=clog)
     clog.log("Checksums complete!")
 
