@@ -65,7 +65,7 @@ def build(cfg: Config) -> None:
 
     The ISO layout is::
 
-        iso-staging/{arch}/
+        iso/{version}/{arch}/staging/
         ├── boot/
         │   ├── grub/
         │   │   └── grub.cfg

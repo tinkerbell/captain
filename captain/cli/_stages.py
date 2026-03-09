@@ -188,7 +188,6 @@ def _build_iso_stage(cfg: Config) -> None:
         isolog,
         [
             "/work/mkosi.output/iso",
-            "/work/mkosi.output/iso-staging",
             "/work/out",
         ],
     )

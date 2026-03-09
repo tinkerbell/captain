@@ -123,7 +123,6 @@ def _clean_version(cfg: Config, clog: StageLogger) -> None:
         mkosi_output / "kernel" / kver / cfg.arch,
         mkosi_output / "initramfs" / kver / cfg.arch,
         mkosi_output / "iso" / kver / cfg.arch,
-        mkosi_output / "iso-staging" / kver / cfg.arch,
     ]
 
     has_docker = shutil.which("docker") is not None
@@ -195,13 +194,12 @@ def _clean_all(cfg: Config, clog: StageLogger) -> None:
                     " /work/mkosi.output/kernel"
                     " /work/mkosi.output/tools"
                     " /work/mkosi.output/iso"
-                    " /work/mkosi.output/iso-staging"
                     " /work/mkosi.cache",
                 ],
             )
     else:
         # No Docker available — remove directly (may need sudo for root-owned mkosi files)
-        for pattern in ("image*", "initramfs", "kernel", "tools", "iso", "iso-staging"):
+        for pattern in ("image*", "initramfs", "kernel", "tools", "iso"):
             for p in mkosi_output.glob(pattern):
                 if p.is_dir():
                     shutil.rmtree(p, ignore_errors=True)

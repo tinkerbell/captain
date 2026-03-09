@@ -198,4 +198,4 @@ class Config:
     @property
     def iso_staging(self) -> Path:
         """Per-version, per-arch staging directory for assembling the ISO filesystem."""
-        return self.project_dir / "mkosi.output" / "iso-staging" / self.kernel_version / self.arch
+        return self.iso_output / "staging"

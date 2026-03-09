@@ -36,6 +36,18 @@ if [[ -f "$BUILDROOT/init" ]]; then
     echo "    /init made executable"
 fi
 
+# Ensure tool binaries are executable.
+# GitHub Actions artifact upload/download and some archive tools strip
+# the execute bit.  Re-apply +x to every tool directory so containerd,
+# runc, nerdctl, and CNI plugins can actually run.
+for dir in usr/local/bin opt/cni/bin; do
+    target="$BUILDROOT/$dir"
+    if [[ -d "$target" ]]; then
+        find "$target" -type f -exec chmod +x {} +
+        echo "    +x restored on $dir/*"
+    fi
+done
+
 # ---------------------------------------------------------------------------
 # Trim kernel modules not needed for provisioning.
 # The kernel is built with a broad defconfig (modules as =m) so the full set

@@ -148,7 +148,7 @@ jobs:
         run: sudo chown -R "$(id -u):$(id -g)" mkosi.output/
 
       - name: Save kernel cache
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && steps.kernel-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -198,7 +198,7 @@ jobs:
         run: ./build.py tools
 
       - name: Save tools cache
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && steps.tools-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -244,6 +244,13 @@ jobs:
         with:
           name: tools-${{ matrix.arch }}
           path: mkosi.output/tools/${{ matrix.arch }}
+
+      - name: Restore tool binary permissions
+        run: |
+          # GitHub Actions artifact upload/download strips execute permissions.
+          # Restore +x on all tool binaries so they work inside the initramfs.
+          chmod +x mkosi.output/tools/${{ matrix.arch }}/usr/local/bin/*
+          chmod +x mkosi.output/tools/${{ matrix.arch }}/opt/cni/bin/*
 
       - name: Refresh apt cache
         run: sudo apt-get update
