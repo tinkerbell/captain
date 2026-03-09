@@ -130,13 +130,17 @@ jobs:
           docker tag "${{ env.BUILDER_IMAGE }}:${HASH}" "${REMOTE}:${HASH}-${{ matrix.arch }}"
           docker push "${REMOTE}:${HASH}-${{ matrix.arch }}"
 
+      - name: Compute kernel cache key
+        id: kernel-cache-key
+        run: echo "key=kernel-${{ matrix.arch }}-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.configs/*', 'Dockerfile') }}" >> "$GITHUB_OUTPUT"
+
       - name: Restore kernel cache
         id: kernel-cache
         uses: actions/cache/restore@v4
         with:
           path: |
             mkosi.output/kernel/${{ env.KERNEL_VERSION }}/${{ matrix.arch }}
-          key: kernel-${{ matrix.arch }}-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.configs/*', 'Dockerfile') }}
+          key: ${{ steps.kernel-cache-key.outputs.key }}
 
       - name: Install Python dependencies
         run: pip install -r requirements.txt
@@ -153,7 +157,7 @@ jobs:
         with:
           path: |
             mkosi.output/kernel/${{ env.KERNEL_VERSION }}/${{ matrix.arch }}
-          key: kernel-${{ matrix.arch }}-${{ env.KERNEL_VERSION }}-${{ hashFiles('kernel.configs/*', 'Dockerfile') }}
+          key: ${{ steps.kernel-cache-key.outputs.key }}
 
       - name: Upload kernel artifacts
         uses: actions/upload-artifact@v4
