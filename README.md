@@ -33,13 +33,14 @@ The build has four stages:
 
 ## Usage
 
-**Prerequisites:** Python >= 3.10, Docker, [configargparse](https://pypi.org/project/ConfigArgParse/)
+**Prerequisites:** `uv` (Python), Docker.
 
 ```bash
-pip install -r requirements.txt
+# Install Astral's `uv` if you don't have it: https://docs.astral.sh/uv/getting-started/installation/
+curl -LsSf https://astral.sh/uv/install.sh | sh # then re-log in
 
 # Build with defaults (amd64, kernel 6.18.16)
-./build.py --help
+uv run ./build.py --help
 
 usage: build.py [flags]
 
@@ -176,9 +177,9 @@ Each stage can be executed in one of three modes:
 
 ```bash
 .
-├── build.py                    # Main build entry point (Python >= 3.10)
+├── build.py                    # Main build entry point (Python >= 3.13; use `uv run build.py`)
 ├── captain/                    # Build system package (stdlib only)
-│   ├── __init__.py
+│   ├── __init__.py             # Package init incl logging
 │   ├── cli.py                  # CLI subcommands (argparse)
 │   ├── config.py               # Configuration from environment
 │   ├── docker.py               # Docker builder management
@@ -190,7 +191,6 @@ Each stage can be executed in one of three modes:
 │   ├── skopeo.py               # skopeo CLI wrapper (inspect/copy/export)
 │   ├── iso.py                  # ISO image assembly
 │   ├── qemu.py                 # QEMU boot testing
-│   ├── log.py                  # Colored logging
 │   └── util.py                 # Shared helpers & arch mapping
 ├── Dockerfile                  # Builder container definition
 ├── Dockerfile.release          # Lightweight container for OCI release ops

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,7 +11,6 @@ import configargparse
 
 from captain import docker, oci
 from captain.config import Config
-from captain.log import for_stage
 from captain.util import check_release_dependencies
 
 from ._parser import (
@@ -22,6 +22,8 @@ from ._parser import (
     _add_release_target_flag,
     _HelpFormatter,
 )
+
+log = logging.getLogger(__name__)
 
 _RELEASE_SUBCOMMANDS = ("publish", "pull", "tag")
 
@@ -85,13 +87,12 @@ def _resolve_git_sha(args: object, project_dir: Path) -> str:
 
 def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> None:
     """OCI artifact operations: publish, pull, tag."""
-    rlog = for_stage("release")
 
     # Peel the release subcommand from extra_args.
     if not extra_args:
-        rlog.err(
-            f"Missing release subcommand.\n"
-            f"  usage: build.py release {{{','.join(_RELEASE_SUBCOMMANDS)}}}\n"
+        log.error(
+            "Missing release subcommand.\n  usage: build.py release {%s}\n",
+            ",".join(_RELEASE_SUBCOMMANDS),
         )
         raise SystemExit(2)
 
@@ -99,8 +100,10 @@ def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> Non
     rest = extra_args[1:]
 
     if sub not in _RELEASE_SUBCOMMANDS:
-        rlog.err(
-            f"Unknown release subcommand '{sub}'.\n  valid: {', '.join(_RELEASE_SUBCOMMANDS)}\n"
+        log.error(
+            "Unknown release subcommand '%s'.\n  valid: %s\n",
+            sub,
+            ", ".join(_RELEASE_SUBCOMMANDS),
         )
         raise SystemExit(2)
 
@@ -110,21 +113,21 @@ def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> Non
 
     # --- validate required args early ---------------------------------
     if sub == "tag" and not rest:
-        rlog.err("Missing version argument.")
+        log.error("Missing version argument.")
         _print_release_subcmd_help(sub, exit_code=2)
     if sub == "pull" and not getattr(args, "pull_output", None):
-        rlog.err("--pull-output is required for 'release pull'.")
+        log.error("--pull-output is required for 'release pull'.")
         _print_release_subcmd_help(sub, exit_code=2)
 
     # --- skip ---------------------------------------------------------
     if cfg.release_mode == "skip":
-        rlog.log("RELEASE_MODE=skip — skipping release operation")
+        log.info("RELEASE_MODE=skip — skipping release operation")
         return
 
     # --- docker -------------------------------------------------------
     if cfg.release_mode == "docker":
-        docker.build_release_image(cfg, logger=rlog)
-        rlog.log(f"Running release {sub} (docker)...")
+        docker.build_release_image(cfg)
+        log.info("Running release %s (docker)...", sub)
         # Forward release-specific env vars into the container.
         registry = getattr(args, "registry", "ghcr.io")
         repository = getattr(args, "repository", "tinkerbell/captain")
@@ -163,8 +166,10 @@ def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> Non
                 cfg,
                 *env_args,
                 "--entrypoint",
-                "python3",
+                "/usr/bin/uv",
                 docker.RELEASE_IMAGE,
+                *(["--verbose"] if logging.getLogger().isEnabledFor(logging.DEBUG) else []),
+                "run",
                 *inner_cmd,
             )
         except subprocess.CalledProcessError as exc:
@@ -173,15 +178,15 @@ def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> Non
         if pull_output:
             container_pull_output = f"/work/{pull_output.lstrip('/')}"
             paths_to_fix.append(container_pull_output)
-        docker.fix_docker_ownership(cfg, rlog, paths_to_fix)
+        docker.fix_docker_ownership(cfg, paths_to_fix)
         return
 
     # --- native -------------------------------------------------------
     if cfg.release_mode == "native":
         missing = check_release_dependencies()
         if missing:
-            rlog.err(f"Missing release tools: {', '.join(missing)}")
-            rlog.err("Install them or set --release-mode=docker.")
+            log.error("Missing release tools: %s", ", ".join(missing))
+            log.error("Install them or set --release-mode=docker.")
             raise SystemExit(1)
     # Common OCI parameters.
     registry = getattr(args, "registry", "ghcr.io")
@@ -203,14 +208,13 @@ def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> Non
             tag=tag,
             sha=sha,
             force=force,
-            logger=rlog,
         )
 
     elif sub == "pull":
         target = getattr(args, "target", None) or cfg.arch
         pull_output = getattr(args, "pull_output", None)
         if pull_output is None:
-            rlog.err("--pull-output is required for 'release pull'.")
+            log.error("--pull-output is required for 'release pull'.")
             raise SystemExit(2)
         oci.pull(
             registry=registry,
@@ -219,7 +223,6 @@ def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> Non
             tag=tag,
             target=target,
             output_dir=Path(pull_output),
-            logger=rlog,
         )
 
     elif sub == "tag":
@@ -230,5 +233,4 @@ def _cmd_release(cfg: Config, extra_args: list[str], args: object = None) -> Non
             artifact_name=artifact_name,
             src_tag=tag,
             new_tag=version,
-            logger=rlog,
         )

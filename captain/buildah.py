@@ -12,30 +12,24 @@ problem caused by ``crane append`` rewriting tags per layer.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
-from captain.log import StageLogger, for_stage
 from captain.util import run
 
-_default_log = for_stage("buildah")
+log = logging.getLogger(__name__)
 
 
 def from_image(
     image: str,
     *,
     platform: str | None = None,
-    logger: StageLogger | None = None,
 ) -> str:
-    """Create a working container from *image* (local ID or ``scratch``).
-
-    Returns the container ID.
-    """
-    _log = logger or _default_log
     cmd: list[str] = ["buildah", "from"]
     if platform:
         cmd += ["--platform", platform]
     cmd.append(image)
-    _log.log(f"buildah from {image}")
+    log.info("buildah from %s", image)
     result = run(cmd, capture=True)
     return result.stdout.strip()
 
@@ -43,12 +37,8 @@ def from_image(
 def add(
     container: str,
     files: list[Path],
-    *,
-    logger: StageLogger | None = None,
 ) -> None:
-    """Add *files* into the root of *container*."""
-    _log = logger or _default_log
-    _log.log(f"buildah add {container} ({len(files)} files)")
+    log.info("buildah add %s (%d files)", container, len(files))
     cmd: list[str] = ["buildah", "add", container]
     cmd += [str(f) for f in files]
     cmd.append("/")
@@ -62,10 +52,7 @@ def config(
     arch: str | None = None,
     annotations: dict[str, str] | None = None,
     labels: dict[str, str] | None = None,
-    logger: StageLogger | None = None,
 ) -> None:
-    """Set image metadata on *container*."""
-    _log = logger or _default_log
     cmd: list[str] = ["buildah", "config"]
     if os:
         cmd += ["--os", os]
@@ -76,7 +63,7 @@ def config(
     for key, value in (labels or {}).items():
         cmd += ["--label", f"{key}={value}"]
     cmd.append(container)
-    _log.log(f"buildah config {container}")
+    log.info("buildah config %s", container)
     run(cmd)
 
 
@@ -84,15 +71,8 @@ def commit(
     container: str,
     *,
     timestamp: int | None = None,
-    logger: StageLogger | None = None,
 ) -> str:
-    """Commit *container* to a local image and remove the container.
-
-    *timestamp* sets the creation timestamp (epoch seconds) for
-    deterministic builds.  Returns the image ID.
-    """
-    _log = logger or _default_log
-    _log.log(f"buildah commit {container}")
+    log.info("buildah commit %s", container)
     cmd: list[str] = ["buildah", "commit", "--rm"]
     if timestamp is not None:
         cmd += ["--timestamp", str(timestamp)]
@@ -104,30 +84,15 @@ def commit(
 def push(
     image_id: str,
     dest: str,
-    *,
-    logger: StageLogger | None = None,
 ) -> None:
-    """Push *image_id* to a remote registry.
-
-    *dest* should be a fully-qualified image reference (without the
-    ``docker://`` transport prefix — it is added automatically).
-    """
-    _log = logger or _default_log
-    _log.log(f"buildah push → {dest}")
+    log.info("buildah push → %s", dest)
     run(["buildah", "push", image_id, f"docker://{dest}"])
 
 
 def manifest_create(
     ref: str,
-    *,
-    logger: StageLogger | None = None,
 ) -> str:
-    """Create a new manifest list named *ref*.
-
-    Returns the manifest list ID.
-    """
-    _log = logger or _default_log
-    _log.log(f"buildah manifest create {ref}")
+    log.info("buildah manifest create %s", ref)
     result = run(["buildah", "manifest", "create", ref], capture=True)
     return result.stdout.strip()
 
@@ -138,38 +103,27 @@ def manifest_add(
     *,
     os: str | None = None,
     arch: str | None = None,
-    logger: StageLogger | None = None,
 ) -> None:
-    """Add *image* to a manifest list."""
-    _log = logger or _default_log
     cmd: list[str] = ["buildah", "manifest", "add"]
     if os:
         cmd += ["--os", os]
     if arch:
         cmd += ["--arch", arch]
     cmd += [manifest, image]
-    _log.log(f"buildah manifest add {manifest} ← {image}")
+    log.info("buildah manifest add %s ← %s", manifest, image)
     run(cmd)
 
 
 def manifest_push(
     manifest: str,
     dest: str,
-    *,
-    logger: StageLogger | None = None,
 ) -> None:
-    """Push *manifest* list (with all referenced images) to *dest*."""
-    _log = logger or _default_log
-    _log.log(f"buildah manifest push → {dest}")
+    log.info("buildah manifest push → %s", dest)
     run(["buildah", "manifest", "push", "--all", manifest, f"docker://{dest}"])
 
 
 def rmi(
     image: str,
-    *,
-    logger: StageLogger | None = None,
 ) -> None:
-    """Remove a local image or manifest list."""
-    _log = logger or _default_log
-    _log.log(f"buildah rmi {image}")
+    log.info("buildah rmi %s", image)
     run(["buildah", "rmi", image])

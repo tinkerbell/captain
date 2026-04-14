@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import shutil
 from pathlib import Path
 
 from captain.config import Config
-from captain.log import StageLogger, for_stage
 from captain.util import ensure_dir
 
-_default_log = for_stage("artifacts")
+log = logging.getLogger(__name__)
 
 
 def _sha256(path: Path) -> str:
@@ -31,9 +31,8 @@ def _human_size(size: int) -> str:
     return f"{size:.1f}T"
 
 
-def collect_kernel(cfg: Config, logger: StageLogger | None = None) -> None:
+def collect_kernel(cfg: Config) -> None:
     """Copy the kernel image from mkosi.output/kernel/{version}/{arch}/ to out/."""
-    _log = logger or _default_log
     out = ensure_dir(cfg.output_dir)
     vmlinuz_dir = cfg.kernel_output
     vmlinuz_files = sorted(vmlinuz_dir.glob("vmlinuz-*")) if vmlinuz_dir.is_dir() else []
@@ -41,28 +40,26 @@ def collect_kernel(cfg: Config, logger: StageLogger | None = None) -> None:
         vmlinuz_src = vmlinuz_files[0]
         vmlinuz_dst = out / f"vmlinuz-{cfg.kernel_version}-{cfg.arch_info.output_arch}"
         shutil.copy2(vmlinuz_src, vmlinuz_dst)
-        _log.log(f"kernel: {vmlinuz_dst} ({_human_size(vmlinuz_dst.stat().st_size)})")
+        log.info("kernel: %s (%s)", vmlinuz_dst, _human_size(vmlinuz_dst.stat().st_size))
     else:
-        _log.warn(f"No kernel image found in {cfg.kernel_output}")
+        log.warning("No kernel image found in %s", cfg.kernel_output)
 
 
-def collect_initramfs(cfg: Config, logger: StageLogger | None = None) -> None:
+def collect_initramfs(cfg: Config) -> None:
     """Copy the initramfs CPIO from mkosi.output/initramfs/{arch}/ to out/."""
-    _log = logger or _default_log
     out = ensure_dir(cfg.output_dir)
     cpio_files = sorted(cfg.initramfs_output.glob("*.cpio*"))
     if cpio_files:
         initrd_src = cpio_files[0]
         initrd_dst = out / f"initramfs-{cfg.kernel_version}-{cfg.arch_info.output_arch}"
         shutil.copy2(initrd_src, initrd_dst)
-        _log.log(f"initramfs: {initrd_dst} ({_human_size(initrd_dst.stat().st_size)})")
+        log.info("initramfs: %s (%s)", initrd_dst, _human_size(initrd_dst.stat().st_size))
     else:
-        _log.warn(f"No initramfs CPIO found in {cfg.initramfs_output}")
+        log.warning("No initramfs CPIO found in %s", cfg.initramfs_output)
 
 
-def collect_iso(cfg: Config, logger: StageLogger | None = None) -> None:
+def collect_iso(cfg: Config) -> None:
     """Copy the ISO image from mkosi.output/iso/{arch}/ to out/."""
-    _log = logger or _default_log
     out = ensure_dir(cfg.output_dir)
     iso_dir = cfg.iso_output
     iso_files = sorted(iso_dir.glob("*.iso")) if iso_dir.is_dir() else []
@@ -70,13 +67,12 @@ def collect_iso(cfg: Config, logger: StageLogger | None = None) -> None:
         iso_src = iso_files[0]
         iso_dst = out / f"captainos-{cfg.kernel_version}-{cfg.arch_info.output_arch}.iso"
         shutil.copy2(iso_src, iso_dst)
-        _log.log(f"iso: {iso_dst} ({_human_size(iso_dst.stat().st_size)})")
+        log.info("iso: %s (%s)", iso_dst, _human_size(iso_dst.stat().st_size))
 
 
 def collect_checksums(
     files: list[Path],
     output: Path,
-    logger: StageLogger | None = None,
 ) -> None:
     """Compute SHA-256 checksums for *files* and write them to *output*.
 
@@ -87,11 +83,10 @@ def collect_checksums(
     Only the bare filename (no directory component) is recorded so that
     ``sha256sum -c`` works from the directory containing the files.
     """
-    _log = logger or _default_log
     lines: list[str] = []
     for path in files:
         if not path.is_file():
-            _log.warn(f"Skipping missing file: {path}")
+            log.warning("Skipping missing file: %s", path)
             continue
         digest = _sha256(path)
         lines.append(f"{digest}  {path.name}")
@@ -99,24 +94,23 @@ def collect_checksums(
         content = "\n".join(lines) + "\n"
         output.parent.mkdir(parents=True, exist_ok=True)
         if output.is_file() and output.read_text() == content:
-            _log.log(f"Checksums unchanged: {output}")
+            log.info("Checksums unchanged: %s", output)
         else:
             output.write_text(content)
-            _log.log(f"Wrote checksums to {output}")
+            log.info("Wrote checksums to %s", output)
         for line in lines:
-            _log.log(f"  {line}")
+            log.info("  %s", line)
     else:
-        # All specified files were missing or non-regular; no checksums written.
-        _log.warn(
-            f"No checksums were written for {len(files)} requested file(s); "
-            "no output checksum file was created."
+        log.warning(
+            "No checksums were written for %d requested file(s); "
+            "no output checksum file was created.",
+            len(files),
         )
 
 
-def collect(cfg: Config, logger: StageLogger | None = None) -> None:
+def collect(cfg: Config) -> None:
     """Copy initramfs, kernel, and ISO images from mkosi.output/ to out/."""
-    _log = logger or _default_log
-    _log.log("Collecting build artifacts...")
-    collect_initramfs(cfg, logger=_log)
-    collect_kernel(cfg, logger=_log)
-    collect_iso(cfg, logger=_log)
+    log.info("Collecting build artifacts...")
+    collect_initramfs(cfg)
+    collect_kernel(cfg)
+    collect_iso(cfg)

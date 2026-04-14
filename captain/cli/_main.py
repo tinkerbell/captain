@@ -15,12 +15,12 @@ The subcommand (``build``, ``kernel``, ``tools``, …) is extracted from
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
 from captain import docker
 from captain.config import Config
-from captain.log import for_stage
 from captain.util import run
 
 from ._commands import (
@@ -37,6 +37,8 @@ from ._commands import (
 )
 from ._parser import _build_parser, _extract_command
 from ._release import _cmd_release
+
+log = logging.getLogger(__name__)
 
 
 def main(project_dir: Path | None = None) -> None:
@@ -105,13 +107,12 @@ def main(project_dir: Path | None = None) -> None:
     else:
         # Pass through to mkosi (shouldn't happen with _extract_command
         # but kept as a safety net).
-        mlog = for_stage("mkosi")
         tools_tree = str(cfg.tools_output)
         modules_tree = str(cfg.modules_output)
         output_dir = str(cfg.initramfs_output)
         match cfg.mkosi_mode:
             case "docker":
-                docker.build_builder(cfg, logger=mlog)
+                docker.build_builder(cfg)
                 container_tree = f"/work/mkosi.output/tools/{cfg.arch}"
                 container_modules = (
                     f"/work/mkosi.output/kernel/{cfg.kernel_version}/{cfg.arch}/modules"
@@ -124,7 +125,6 @@ def main(project_dir: Path | None = None) -> None:
                     f"--output-dir={container_outdir}",
                     command,
                     *extra,
-                    logger=mlog,
                 )
             case "native":
                 run(
@@ -140,5 +140,5 @@ def main(project_dir: Path | None = None) -> None:
                     cwd=cfg.project_dir,
                 )
             case "skip":
-                mlog.err(f"Cannot pass '{command}' to mkosi when MKOSI_MODE=skip.")
+                log.error("Cannot pass '%s' to mkosi when MKOSI_MODE=skip.", command)
                 raise SystemExit(1)

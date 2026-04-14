@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 
 from captain.config import Config
-from captain.log import for_stage
 from captain.util import run
 
-_log = for_stage("qemu")
+log = logging.getLogger(__name__)
 
 # Tinkerbell kernel cmdline parameters.
 # Maps the argparse dest name → kernel cmdline key.
@@ -40,9 +40,9 @@ def _tink_cmdline(args: argparse.Namespace) -> str:
         # Kernel cmdline is space-delimited; whitespace in values would
         # split them into multiple arguments and silently change meaning.
         if any(ch.isspace() for ch in value):
-            _log.err(
-                f"--{attr.replace('_', '-')} must not contain whitespace; "
-                "cannot safely add it to the kernel cmdline."
+            log.error(
+                "--%s must not contain whitespace; cannot safely add it to the kernel cmdline.",
+                attr.replace("_", "-"),
             )
             sys.exit(1)
         parts.append(f"{cmdline_key}={value}")
@@ -51,7 +51,7 @@ def _tink_cmdline(args: argparse.Namespace) -> str:
     ipam = getattr(args, "ipam", "") or ""
     if ipam:
         if any(ch.isspace() for ch in ipam):
-            _log.err("--ipam must not contain whitespace.")
+            log.error("--ipam must not contain whitespace.")
             sys.exit(1)
         parts.append(f"ipam={ipam}")
 
@@ -74,27 +74,27 @@ def run_qemu(cfg: Config, args: argparse.Namespace | None = None) -> None:
     if not initrd.is_file():
         missing.append(str(initrd))
     if missing:
-        _log.err("Build artifacts not found:")
+        log.error("Build artifacts not found:")
         for m in missing:
-            _log.err(f"  {m}")
-        _log.err(f"Run './build.py --kernel-version {cfg.kernel_version}' first.")
+            log.error("  %s", m)
+        log.error("Run './build.py --kernel-version %s' first.", cfg.kernel_version)
         sys.exit(1)
 
     tink = _tink_cmdline(args) if args is not None else ""
     if args is not None and not any(
         getattr(args, v, None) for v in ("tink_worker_image", "tink_docker_registry")
     ):
-        _log.warn(
+        log.warning(
             "Neither --tink-worker-image nor --tink-docker-registry is set. "
             "tink-agent services will not start."
         )
 
-    _log.log("Booting CaptainOS in QEMU (Ctrl-A X to exit)...")
+    log.info("Booting CaptainOS in QEMU (Ctrl-A X to exit)...")
 
     qemu_cmd = cfg.arch_info.qemu_binary
     append = f"console=ttyS0 audit=0 {tink} {cfg.qemu_append}".strip()
 
-    _log.log(f"Kernel cmdline: {append}")
+    log.info("Kernel cmdline: %s", append)
     run(
         [
             qemu_cmd,

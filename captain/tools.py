@@ -8,6 +8,7 @@ both native and Docker modes.
 from __future__ import annotations
 
 import io
+import logging
 import os
 import stat
 import tarfile
@@ -16,10 +17,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from captain.config import Config
-from captain.log import for_stage
 from captain.util import ensure_dir, safe_extractall
 
-_log = for_stage("tools")
+log = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -91,7 +91,7 @@ def _check_binary(dest_dir: Path, tool: ToolSpec) -> str | None:
 
 def _download_tarball(url: str, dest_dir: Path, members: list[str]) -> None:
     """Download a gzipped tarball and extract specific members."""
-    _log.log(f"    Downloading {url}")
+    log.info("    Downloading %s", url)
     with urllib.request.urlopen(url, timeout=60) as resp:
         data = resp.read()
 
@@ -114,7 +114,7 @@ def _download_tarball(url: str, dest_dir: Path, members: list[str]) -> None:
 
 def _download_binary(url: str, dest: Path) -> None:
     """Download a single binary file."""
-    _log.log(f"    Downloading {url}")
+    log.info("    Downloading %s", url)
     with urllib.request.urlopen(url, timeout=60) as resp:
         dest.parent.mkdir(parents=True, exist_ok=True)
         with open(dest, "wb") as f:
@@ -127,11 +127,11 @@ def download_tool(tool: ToolSpec, arch: str, output_base: Path, force: bool) -> 
     dest_dir = ensure_dir(output_base / tool.dest)
 
     if not force and _check_binary(dest_dir, tool):
-        _log.log(f"{tool.name} already present (set FORCE_TOOLS=1 to re-download)")
+        log.info("%s already present (set FORCE_TOOLS=1 to re-download)", tool.name)
         return
 
     url = tool.url_template.format(version=tool.version, arch=arch)
-    _log.log(f"Installing {tool.name} {tool.version} ({arch})...")
+    log.info("Installing %s %s (%s)...", tool.name, tool.version, arch)
 
     if tool.members is not None:
         # Tarball with selective extraction
@@ -145,16 +145,16 @@ def download_tool(tool: ToolSpec, arch: str, output_base: Path, force: bool) -> 
         p = dest_dir / name
         if p.exists():
             p.unlink()
-            _log.log(f"    Removed leftover: {p.name}")
+            log.info("    Removed leftover: %s", p.name)
 
     # Report installed files
     if tool.members:
         for m in tool.members:
             p = dest_dir / m
             if p.exists():
-                _log.log(f"    {tool.name}: {p}")
+                log.info("    %s: %s", tool.name, p)
     elif tool.binary_name:
-        _log.log(f"    {tool.name}: {dest_dir / tool.binary_name}")
+        log.info("    %s: %s", tool.name, dest_dir / tool.binary_name)
 
 
 def download_all(cfg: Config) -> None:
@@ -165,9 +165,5 @@ def download_all(cfg: Config) -> None:
     for tool in TOOLS:
         download_tool(tool, arch, output_base, cfg.force_tools)
 
-    _log.log("Tool download complete.")
-
-    # NOTE: UPX compression is not used. The initramfs is a zstd-compressed
-    # CPIO archive, and zstd compresses raw ELF binaries better than UPX-packed
-    # ones (UPX output looks like random data to zstd, defeating its compression).
-    _log.log("All tools ready.")
+    log.info("Tool download complete.")
+    log.info("All tools ready.")

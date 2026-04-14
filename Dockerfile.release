@@ -1,15 +1,15 @@
 # Lightweight container for OCI release operations (publish, index, pull, tag).
-# Contains buildah, skopeo, Python 3, git, and configargparse — nothing else.
 #
 # Usage:
 #   docker build -f Dockerfile.release -t captainos-release .
 #   docker run --rm -v $(pwd):/work captainos-release release publish
-FROM python:3.12-slim
+FROM debian:trixie
 
-# Install buildah, skopeo, and git
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install buildah, skopeo, curl and git
+RUN apt-get -o "Dpkg::Use-Pty=0" update && apt-get -o "Dpkg::Use-Pty=0" install -y --no-install-recommends \
     buildah \
     skopeo \
+    curl \
     git \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
@@ -28,10 +28,19 @@ RUN mkdir -p /usr/libexec/podman \
     && printf '#!/bin/sh\nexit 0\n' > /usr/libexec/podman/netavark \
     && chmod +x /usr/libexec/podman/netavark
 
-# Install Python dependencies
-COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
+# Install astral-sh's uv with a script - install to /usr for global access
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/bin" sh
+
+# Verify uv is functional
+RUN uv --version
+
+# Prime uv's cache with our pyproject.toml to speed up runtime
+COPY pyproject.toml /tmp/pyproject.toml
+COPY captain /tmp/captain
+COPY build.py /tmp/build.py
+WORKDIR /tmp
+RUN uv --verbose run build.py --help
 
 WORKDIR /work
-ENTRYPOINT ["python3", "/work/build.py"]
+ENTRYPOINT ["/usr/bin/uv", "run", "/work/build.py"]
 CMD ["release", "--help"]

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from captain.util import ArchInfo, get_arch_info
+
+log = logging.getLogger(__name__)
 
 # Valid values for KERNEL_MODE and MKOSI_MODE.
 VALID_MODES = ("docker", "native", "skip")
@@ -70,10 +73,7 @@ class Config:
             ("RELEASE_MODE", self.release_mode),
         ):
             if value not in VALID_MODES:
-                print(
-                    f"ERROR: {name}={value!r} is invalid. Valid values: {', '.join(VALID_MODES)}",
-                    file=sys.stderr,
-                )
+                log.error("%s=%r is invalid. Valid values: %s", name, value, ", ".join(VALID_MODES))
                 sys.exit(1)
 
     @property

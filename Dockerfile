@@ -9,11 +9,7 @@ ARG MKOSI_VERSION=v26
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install mkosi runtime dependencies and kernel build dependencies in one layer
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    # mkosi runtime deps
-    python3 \
-    python3-pip \
-    python3-venv \
+RUN apt-get -o "Dpkg::Use-Pty=0" update && apt-get -o "Dpkg::Use-Pty=0" install -y --no-install-recommends \
     apt \
     dpkg \
     debian-archive-keyring \
@@ -59,19 +55,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     grub-common \
     && NATIVE_ARCH="$(dpkg --print-architecture)" \
     && FOREIGN_ARCH=$([ "$NATIVE_ARCH" = "amd64" ] && echo "arm64" || echo "amd64") \
-    && apt-get install -y --no-install-recommends "grub-efi-${NATIVE_ARCH}-bin" \
+    && apt-get -o "Dpkg::Use-Pty=0" install -y --no-install-recommends "grub-efi-${NATIVE_ARCH}-bin" \
     && dpkg --add-architecture "$FOREIGN_ARCH" \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends "grub-efi-${FOREIGN_ARCH}-bin:${FOREIGN_ARCH}" \
+    && apt-get -o "Dpkg::Use-Pty=0" update \
+    && apt-get -o "Dpkg::Use-Pty=0" install -y --no-install-recommends "grub-efi-${FOREIGN_ARCH}-bin:${FOREIGN_ARCH}" \
     && rm -rf /var/lib/apt/lists/*
 
-# Install mkosi from GitHub (not on PyPI)
-RUN pip3 install --break-system-packages \
-    configargparse \
-    "git+https://github.com/systemd/mkosi.git@${MKOSI_VERSION}"
+# Install astral-sh's uv with a script - install to /usr for global access
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/usr/bin" sh
+
+# Verify uv is functional
+RUN uv --version
+
+# Install mkosi from GitHub (not on PyPI) via uv; symlink to /usr/bin for global access
+RUN uv tool install "git+https://github.com/systemd/mkosi.git@${MKOSI_VERSION}"
+RUN ln -sf ~/.local/bin/mkosi /usr/bin/mkosi
 
 # Verify mkosi is functional
 RUN mkosi --version
+
+# Prime uv's cache with our pyproject.toml to speed up runtime
+COPY pyproject.toml /tmp/pyproject.toml
+COPY captain /tmp/captain
+COPY build.py /tmp/build.py
+WORKDIR /tmp
+RUN uv --verbose run build.py --help
 
 WORKDIR /work
 ENTRYPOINT ["mkosi"]

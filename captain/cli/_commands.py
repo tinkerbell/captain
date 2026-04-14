@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
+import sys
 from pathlib import Path
 
 from captain import artifacts, docker, qemu
 from captain.config import Config
-from captain.log import StageLogger, for_stage
 from captain.util import run
 
 from ._stages import (
@@ -17,21 +18,20 @@ from ._stages import (
     _build_tools_stage,
 )
 
+log = logging.getLogger(__name__)
+
 
 def _cmd_kernel(cfg: Config, _extra_args: list[str]) -> None:
     """Build only the kernel (no tools, no mkosi)."""
-    klog = for_stage("kernel")
     _build_kernel_stage(cfg)
-    # Copy vmlinuz to the standard out/ directory.
-    artifacts.collect_kernel(cfg, logger=klog)
-    klog.log("Kernel build stage complete!")
+    artifacts.collect_kernel(cfg)
+    log.info("Kernel build stage complete!")
 
 
 def _cmd_tools(cfg: Config, _extra_args: list[str]) -> None:
     """Download tools (containerd, runc, nerdctl, CNI plugins)."""
     _build_tools_stage(cfg)
-    tlog = for_stage("tools")
-    tlog.log("Tools stage complete!")
+    log.info("Tools stage complete!")
 
 
 def _check_kernel_modules(cfg: Config) -> None:
@@ -42,80 +42,80 @@ def _check_kernel_modules(cfg: Config) -> None:
     issue) the build should fail immediately rather than silently
     producing an initramfs without modules.
     """
-    ilog = for_stage("initramfs")
     modules_dir = cfg.modules_output / "usr" / "lib" / "modules"
     if not modules_dir.is_dir():
-        ilog.err(f"Kernel modules directory not found: {modules_dir}")
-        ilog.err("Ensure the kernel build artifacts are downloaded correctly.")
+        log.error("Kernel modules directory not found: %s", modules_dir)
+        log.error("Ensure the kernel build artifacts are downloaded correctly.")
         raise SystemExit(1)
     # Check that at least one module version directory exists with modules
     version_dirs = [d for d in modules_dir.iterdir() if d.is_dir()]
     if not version_dirs:
-        ilog.err(f"No kernel version directories found in {modules_dir}")
+        log.error("No kernel version directories found in %s", modules_dir)
         raise SystemExit(1)
     # Search all version directories for at least one kernel module
     for version_dir in version_dirs:
         if any(version_dir.rglob("*.ko*")):
-            ilog.log(f"Kernel modules found in {version_dir} (version: {version_dir.name})")
+            log.info("Kernel modules found in %s (version: %s)", version_dir, version_dir.name)
             return
     searched = ", ".join(str(d) for d in version_dirs)
-    ilog.err("No kernel modules (.ko/.ko.zst) found in any kernel version directory.")
-    ilog.err(f"Searched directories: {searched}")
+    log.error("No kernel modules (.ko/.ko.zst) found in any kernel version directory.")
+    log.error("Searched directories: %s", searched)
     raise SystemExit(1)
 
 
 def _cmd_initramfs(cfg: Config, extra_args: list[str]) -> None:
     """Build only the initramfs via mkosi, then collect artifacts."""
-    ilog = for_stage("initramfs")
     _check_kernel_modules(cfg)
     _build_mkosi_stage(cfg, extra_args)
-    artifacts.collect_initramfs(cfg, logger=ilog)
-    artifacts.collect_kernel(cfg, logger=ilog)
-    ilog.log("Initramfs build complete!")
+    artifacts.collect_initramfs(cfg)
+    artifacts.collect_kernel(cfg)
+    log.info("Initramfs build complete!")
 
 
 def _cmd_iso(cfg: Config, _extra_args: list[str]) -> None:
     """Build only the ISO image."""
-    isolog = for_stage("iso")
     _build_iso_stage(cfg)
-    artifacts.collect_iso(cfg, logger=isolog)
-    isolog.log("ISO build complete!")
+    artifacts.collect_iso(cfg)
+    log.info("ISO build complete!")
 
 
 def _cmd_build(cfg: Config, extra_args: list[str]) -> None:
     """Full build: kernel → tools → initramfs → iso → artifacts."""
-    blog = for_stage("build")
     _build_kernel_stage(cfg)
     _build_tools_stage(cfg)
     _build_mkosi_stage(cfg, extra_args)
     _build_iso_stage(cfg)
-    artifacts.collect(cfg, logger=blog)
-    blog.log("Build complete!")
+    artifacts.collect(cfg)
+    log.info("Build complete!")
 
 
 def _cmd_shell(cfg: Config, _extra_args: list[str]) -> None:
     """Interactive shell inside the builder container."""
-    slog = for_stage("shell")
-    docker.build_builder(cfg, logger=slog)
-    slog.log("Entering builder shell (type 'exit' to leave)...")
-    docker.run_in_builder(cfg, "-it", "--entrypoint", "/bin/bash", cfg.builder_image)
+    docker.build_builder(cfg)
+    log.info("Entering builder shell (type 'exit' to leave)...")
+    docker.run_in_builder(
+        cfg,
+        *(["-it"] if sys.stdout.isatty() and sys.stdin.isatty() else []),
+        "--entrypoint",
+        "/bin/bash",
+        cfg.builder_image,
+    )
 
 
 def _cmd_clean(cfg: Config, _extra_args: list[str], args: object = None) -> None:
     """Remove build artifacts for the selected kernel version, or all."""
-    clog = for_stage("clean")
     clean_all = getattr(args, "clean_all", False)
 
     if clean_all:
-        _clean_all(cfg, clog)
+        _clean_all(cfg)
     else:
-        _clean_version(cfg, clog)
+        _clean_version(cfg)
 
 
-def _clean_version(cfg: Config, clog: StageLogger) -> None:
+def _clean_version(cfg: Config) -> None:
     """Remove build artifacts for a single kernel version."""
     kver = cfg.kernel_version
-    clog.log(f"Cleaning build artifacts for kernel {kver} ({cfg.arch})...")
+    log.info("Cleaning build artifacts for kernel %s (%s)...", kver, cfg.arch)
     mkosi_output = cfg.mkosi_output
 
     # Version-specific directories under mkosi.output/{stage}/{version}/{arch}
@@ -164,12 +164,12 @@ def _clean_version(cfg: Config, clog: StageLogger) -> None:
             for p in cfg.output_dir.glob(pattern):
                 p.unlink(missing_ok=True)
 
-    clog.log(f"Clean complete for kernel {kver}.")
+    log.info("Clean complete for kernel %s.", kver)
 
 
-def _clean_all(cfg: Config, clog: StageLogger) -> None:
+def _clean_all(cfg: Config) -> None:
     """Remove all build artifacts (all kernel versions)."""
-    clog.log("Cleaning ALL build artifacts...")
+    log.info("Cleaning ALL build artifacts...")
     mkosi_output = cfg.mkosi_output
     mkosi_cache = cfg.project_dir / "mkosi.cache"
 
@@ -210,18 +210,17 @@ def _clean_all(cfg: Config, clog: StageLogger) -> None:
 
     if cfg.output_dir.exists():
         shutil.rmtree(cfg.output_dir)
-    clog.log("Clean complete.")
+    log.info("Clean complete.")
 
 
 def _cmd_summary(cfg: Config, _extra_args: list[str]) -> None:
     """Print mkosi configuration summary."""
-    slog = for_stage("summary")
     tools_tree = str(cfg.tools_output)
     modules_tree = str(cfg.modules_output)
     output_dir = str(cfg.initramfs_output)
     match cfg.mkosi_mode:
         case "docker":
-            docker.build_builder(cfg, logger=slog)
+            docker.build_builder(cfg)
             container_tree = f"/work/mkosi.output/tools/{cfg.arch}"
             container_modules = f"/work/mkosi.output/kernel/{cfg.kernel_version}/{cfg.arch}/modules"
             container_outdir = f"/work/mkosi.output/initramfs/{cfg.kernel_version}/{cfg.arch}"
@@ -231,7 +230,6 @@ def _cmd_summary(cfg: Config, _extra_args: list[str]) -> None:
                 f"--extra-tree={container_modules}",
                 f"--output-dir={container_outdir}",
                 "summary",
-                logger=slog,
             )
         case "native":
             run(
@@ -246,25 +244,23 @@ def _cmd_summary(cfg: Config, _extra_args: list[str]) -> None:
                 cwd=cfg.project_dir,
             )
         case "skip":
-            slog.err("Cannot show mkosi summary when MKOSI_MODE=skip.")
+            log.error("Cannot show mkosi summary when MKOSI_MODE=skip.")
             raise SystemExit(1)
 
 
 def _cmd_checksums(cfg: Config, _extra_args: list[str], args: object = None) -> None:
     """Compute SHA-256 checksums for the specified files."""
-    clog = for_stage("checksums")
     files = getattr(args, "files", None) or []
     output = getattr(args, "output", None)
 
     if files:
         # Explicit mode: user provided specific files and output.
         if not output:
-            clog.err("--output is required when specifying files explicitly.")
+            log.error("--output is required when specifying files explicitly.")
             raise SystemExit(1)
         artifacts.collect_checksums(
             [Path(f) for f in files],
             Path(output),
-            logger=clog,
         )
     else:
         # Default mode: produce checksums for the selected architecture.
@@ -278,11 +274,11 @@ def _cmd_checksums(cfg: Config, _extra_args: list[str], args: object = None) -> 
         ]
         existing = [f for f in arch_files if f.is_file()]
         if not existing:
-            clog.err(f"No artifacts found for {kver}-{oarch} in {out}")
+            log.error("No artifacts found for %s-%s in %s", kver, oarch, out)
             raise SystemExit(1)
         dest = Path(output) if output else out / f"sha256sums-{kver}-{oarch}.txt"
-        artifacts.collect_checksums(existing, dest, logger=clog)
-    clog.log("Checksums complete!")
+        artifacts.collect_checksums(existing, dest)
+    log.info("Checksums complete!")
 
 
 def _cmd_qemu_test(cfg: Config, _extra_args: list[str], args: object = None) -> None:

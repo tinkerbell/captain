@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 import textwrap
 from pathlib import Path
 
 from captain.config import Config
-from captain.log import for_stage
 from captain.util import ensure_dir, run
 
-_log = for_stage("iso")
+log = logging.getLogger(__name__)
 
 # GRUB platform directory name per architecture.
 _GRUB_PLATFORM = {
@@ -44,8 +44,8 @@ def _find_vmlinuz(cfg: Config) -> Path:
     vmlinuz_dir = cfg.kernel_output
     candidates = sorted(vmlinuz_dir.glob("vmlinuz-*")) if vmlinuz_dir.is_dir() else []
     if not candidates:
-        _log.err(f"No vmlinuz found in {vmlinuz_dir}")
-        _log.err("Build the kernel first: ./build.py kernel")
+        log.error("No vmlinuz found in %s", vmlinuz_dir)
+        log.error("Build the kernel first: ./build.py kernel")
         raise SystemExit(1)
     return candidates[0]
 
@@ -54,8 +54,8 @@ def _find_initramfs(cfg: Config) -> Path:
     """Locate the initramfs CPIO image."""
     cpio_files = sorted(cfg.initramfs_output.glob("*.cpio*"))
     if not cpio_files:
-        _log.err(f"No initramfs CPIO found in {cfg.initramfs_output}")
-        _log.err("Build the initramfs first: ./build.py initramfs")
+        log.error("No initramfs CPIO found in %s", cfg.initramfs_output)
+        log.error("Build the initramfs first: ./build.py initramfs")
         raise SystemExit(1)
     return cpio_files[0]
 
@@ -80,10 +80,9 @@ def build(cfg: Config) -> None:
 
     grub_platform = _GRUB_PLATFORM.get(cfg.arch)
     if grub_platform is None:
-        _log.err(f"Unsupported architecture for ISO build: {cfg.arch}")
+        log.error("Unsupported architecture for ISO build: %s", cfg.arch)
         raise SystemExit(1)
 
-    # Prepare staging directory
     staging = cfg.iso_staging
     if staging.exists():
         shutil.rmtree(staging)
@@ -91,23 +90,20 @@ def build(cfg: Config) -> None:
     boot_dir = ensure_dir(staging / "boot")
     grub_dir = ensure_dir(boot_dir / "grub")
 
-    _log.log(f"Staging ISO filesystem at {staging}")
+    log.info("Staging ISO filesystem at %s", staging)
 
-    # Copy kernel and initramfs
     shutil.copy2(vmlinuz, boot_dir / "vmlinuz")
     shutil.copy2(initramfs, boot_dir / "initramfs")
 
-    # Write GRUB configuration
     (grub_dir / "grub.cfg").write_text(_grub_cfg(cfg.arch))
 
-    # Build the ISO
     iso_dir = ensure_dir(cfg.iso_output)
     iso_path = iso_dir / f"captainos-{cfg.kernel_version}-{cfg.arch_info.output_arch}.iso"
 
-    _log.log(f"Building ISO with grub-mkrescue ({grub_platform})...")
+    log.info("Building ISO with grub-mkrescue (%s)...", grub_platform)
     grub_mkrescue = shutil.which("grub-mkrescue")
     if grub_mkrescue is None:
-        _log.err("grub-mkrescue not found. Install grub-common or use ISO_MODE=docker.")
+        log.error("grub-mkrescue not found. Install grub-common or use ISO_MODE=docker.")
         raise SystemExit(1)
 
     run(
@@ -121,4 +117,4 @@ def build(cfg: Config) -> None:
     )
 
     size_mb = iso_path.stat().st_size / (1024 * 1024)
-    _log.log(f"ISO created: {iso_path} ({size_mb:.1f}M)")
+    log.info("ISO created: %s (%.1fM)", iso_path, size_mb)

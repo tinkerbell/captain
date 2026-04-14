@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import shutil
 import tarfile
 from datetime import datetime
 from pathlib import Path
 
 from captain import artifacts, buildah
-from captain.log import StageLogger
 from captain.util import get_arch_info
+
+log = logging.getLogger(__name__)
 
 
 def _deterministic_tar(file_path: Path, output_dir: Path) -> Path:
@@ -39,7 +41,6 @@ def _collect_arch_artifacts(
     out: Path,
     arch: str,
     kernel_version: str,
-    logger: StageLogger,
 ) -> list[Path]:
     """Collect and return the artifact files for a single architecture.
 
@@ -52,9 +53,9 @@ def _collect_arch_artifacts(
     vmlinuz_dst = out / f"vmlinuz-{kernel_version}-{oarch}"
     if vmlinuz_files:
         shutil.copy2(vmlinuz_files[0], vmlinuz_dst)
-        logger.log(f"kernel: {vmlinuz_dst}")
+        log.info("kernel: %s", vmlinuz_dst)
     else:
-        logger.warn(f"No kernel image found for {arch}")
+        log.warning("No kernel image found for %s", arch)
 
     arch_files = [
         out / f"vmlinuz-{kernel_version}-{oarch}",
@@ -62,12 +63,12 @@ def _collect_arch_artifacts(
         out / f"captainos-{kernel_version}-{oarch}.iso",
     ]
     checksums_path = out / f"sha256sums-{kernel_version}-{oarch}.txt"
-    artifacts.collect_checksums(arch_files, checksums_path, logger=logger)
+    artifacts.collect_checksums(arch_files, checksums_path)
 
     push_files = [*arch_files, checksums_path]
     for f in push_files:
         if not f.is_file():
-            logger.err(f"Missing artifact: {f}")
+            log.error("Missing artifact: %s", f)
             raise SystemExit(1)
     return push_files
 
@@ -77,7 +78,6 @@ def _build_platform_image(
     platform: str,
     sha: str,
     repository: str,
-    logger: StageLogger,
     *,
     created: str,
     tag: str,
@@ -118,8 +118,8 @@ def _build_platform_image(
     intermediates: list[str] = []
     for i, tar_path in enumerate(layer_tars):
         is_last = i == len(layer_tars) - 1
-        ctr = buildah.from_image(current, platform=platform, logger=logger)
-        buildah.add(ctr, [tar_path], logger=logger)
+        ctr = buildah.from_image(current, platform=platform)
+        buildah.add(ctr, [tar_path])
         if is_last:
             buildah.config(
                 ctr,
@@ -127,15 +127,14 @@ def _build_platform_image(
                 arch=arch,
                 annotations=oci_metadata,
                 labels=oci_metadata,
-                logger=logger,
             )
         prev = current
-        current = buildah.commit(ctr, timestamp=epoch, logger=logger)
+        current = buildah.commit(ctr, timestamp=epoch)
         if prev != base:
             intermediates.append(prev)
 
     for img in intermediates:
         with contextlib.suppress(Exception):
-            buildah.rmi(img, logger=logger)
+            buildah.rmi(img)
 
     return current

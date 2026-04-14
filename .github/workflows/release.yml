@@ -27,13 +27,13 @@ jobs:
       - name: Load shared config
         run: cat .github/config.env >> "$GITHUB_ENV"
 
-      - name: Install Python dependencies
-        run: pip install -r requirements.txt
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
 
       - name: Pull release artifacts (combined)
         env:
           VERSION_EXCLUDE: ${{ github.ref_name }}
-        run: ./build.py release pull --target combined --pull-output artifacts/combined
+        run: uv run ./build.py release pull --target combined --pull-output artifacts/combined
 
       - name: Create GitHub Release
         env:
@@ -47,4 +47,4 @@ jobs:
       - name: Tag OCI artifacts with version
         env:
           VERSION_EXCLUDE: ${{ github.ref_name }}
-        run: ./build.py release tag ${{ github.ref_name }}
+        run: uv run ./build.py release tag ${{ github.ref_name }}

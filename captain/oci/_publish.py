@@ -3,23 +3,24 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from captain import buildah, skopeo
 from captain.config import Config
-from captain.log import StageLogger
 from captain.util import ensure_dir
 
 from ._build import _build_platform_image, _collect_arch_artifacts, _deterministic_tar
-from ._common import _ARCHES, _default_log, _image_ref
+from ._common import _ARCHES, _image_ref
+
+log = logging.getLogger(__name__)
 
 
 def _create_push_cleanup(
     image_ids: list[str],
     dest_ref: str,
-    logger: StageLogger,
 ) -> None:
     """Create a manifest list from *image_ids*, push it to *dest_ref*, and clean up.
 
@@ -30,17 +31,17 @@ def _create_push_cleanup(
     temp_name = f"captain-local-{uuid4().hex[:12]}"
     manifest_id: str | None = None
     try:
-        manifest_id = buildah.manifest_create(temp_name, logger=logger)
+        manifest_id = buildah.manifest_create(temp_name)
         for image_id in image_ids:
-            buildah.manifest_add(manifest_id, image_id, logger=logger)
-        buildah.manifest_push(manifest_id, dest_ref, logger=logger)
+            buildah.manifest_add(manifest_id, image_id)
+        buildah.manifest_push(manifest_id, dest_ref)
     finally:
         if manifest_id is not None:
             with contextlib.suppress(Exception):
-                buildah.rmi(manifest_id, logger=logger)
+                buildah.rmi(manifest_id)
         for image_id in image_ids:
             with contextlib.suppress(Exception):
-                buildah.rmi(image_id, logger=logger)
+                buildah.rmi(image_id)
 
 
 def _publish_single_arch(
@@ -52,7 +53,6 @@ def _publish_single_arch(
     repository: str,
     artifact_name: str,
     created: str,
-    logger: StageLogger,
 ) -> None:
     """Build a per-arch multi-arch index and push it.
 
@@ -66,14 +66,13 @@ def _publish_single_arch(
             f"linux/{platform_arch}",
             sha,
             repository,
-            logger,
             created=created,
             tag=tag,
             artifact_name=artifact_name,
         )
         image_ids.append(image_id)
 
-    _create_push_cleanup(image_ids, ref, logger)
+    _create_push_cleanup(image_ids, ref)
 
 
 def _publish_combined(
@@ -86,7 +85,6 @@ def _publish_combined(
     sha: str,
     created: str,
     force: bool = False,
-    logger: StageLogger,
 ) -> bool:
     """Build and push the combined multi-arch image.
 
@@ -104,19 +102,20 @@ def _publish_combined(
     combined_ref = _image_ref(registry, repository, artifact_name, tag)
 
     # Skip if the combined image already exists.
-    if not force and skopeo.image_exists(combined_ref, logger=logger):
-        logger.log(f"{combined_ref} already exists — skipping (use --force to overwrite)")
+    if not force and skopeo.image_exists(combined_ref):
+        log.info("%s already exists — skipping (use --force to overwrite)", combined_ref)
         return False
 
     # Ensure per-arch images exist in the registry.
     for arch in _ARCHES:
         per_arch_tag = f"{tag}-{arch}"
         per_arch_ref = _image_ref(registry, repository, artifact_name, per_arch_tag)
-        if skopeo.image_exists(per_arch_ref, logger=logger):
-            logger.log(f"Found {per_arch_ref} in registry — will reuse layers for combined image")
+        if skopeo.image_exists(per_arch_ref):
+            log.info("Found %s in registry — will reuse layers for combined image", per_arch_ref)
         else:
-            logger.log(
-                f"{per_arch_ref} not found in registry — building and pushing before combined image"
+            log.info(
+                "%s not found in registry — building and pushing before combined image",
+                per_arch_ref,
             )
             _publish_single_arch(
                 layer_tars=arch_layer_tars[arch],
@@ -126,7 +125,6 @@ def _publish_combined(
                 repository=repository,
                 artifact_name=artifact_name,
                 created=created,
-                logger=logger,
             )
 
     # Build the combined image using per-arch registry images as bases.
@@ -140,7 +138,6 @@ def _publish_combined(
             f"linux/{arch}",
             sha,
             repository,
-            logger,
             created=created,
             tag=tag,
             artifact_name=artifact_name,
@@ -148,7 +145,7 @@ def _publish_combined(
         )
         image_ids.append(image_id)
 
-    _create_push_cleanup(image_ids, combined_ref, logger)
+    _create_push_cleanup(image_ids, combined_ref)
     return True
 
 
@@ -162,7 +159,6 @@ def publish(
     tag: str,
     sha: str,
     force: bool = False,
-    logger: StageLogger | None = None,
 ) -> None:
     """Collect artifacts and publish a multi-arch OCI index.
 
@@ -177,15 +173,14 @@ def publish(
     (unless *force* is ``True``).  For per-arch targets this prevents
     overwriting images that the combined image depends on.
     """
-    _log = logger or _default_log
     arches = list(_ARCHES) if target == "combined" else [target]
     tag_suffix = "" if target == "combined" else f"-{target}"
     full_tag = f"{tag}{tag_suffix}"
     final_ref = _image_ref(registry, repository, artifact_name, full_tag)
 
     # For per-arch targets, skip if the image already exists.
-    if target != "combined" and not force and skopeo.image_exists(final_ref, logger=_log):
-        _log.log(f"{final_ref} already exists — skipping (use --force to overwrite)")
+    if target != "combined" and not force and skopeo.image_exists(final_ref):
+        log.info("%s already exists — skipping (use --force to overwrite)", final_ref)
         return
 
     out = ensure_dir(cfg.output_dir)
@@ -199,7 +194,6 @@ def publish(
             out,
             arch,
             cfg.kernel_version,
-            _log,
         )
 
     # Create deterministic layer tars (shared across manifest pushes).
@@ -219,7 +213,6 @@ def publish(
                 sha=sha,
                 created=created,
                 force=force,
-                logger=_log,
             )
         else:
             _publish_single_arch(
@@ -230,7 +223,6 @@ def publish(
                 repository=repository,
                 artifact_name=artifact_name,
                 created=created,
-                logger=_log,
             )
     finally:
         for tars in arch_layer_tars.values():
@@ -245,12 +237,12 @@ def publish(
     for arch in arches:
         artifact_names.extend(f.name for f in arch_files.get(arch, []))
     platforms = [f"linux/{a}" for a in _ARCHES]
-    _log.log("")
-    _log.log("Publish complete")
-    _log.log(f"  Image:     {final_ref}")
-    _log.log(f"  Target:    {target}")
-    _log.log(f"  Platforms: {', '.join(platforms)}")
-    _log.log(f"  Layers:    {len(artifact_names)}")
-    _log.log("  Artifacts:")
+    log.info("")
+    log.info("Publish complete")
+    log.info("  Image:     %s", final_ref)
+    log.info("  Target:    %s", target)
+    log.info("  Platforms: %s", ", ".join(platforms))
+    log.info("  Layers:    %d", len(artifact_names))
+    log.info("  Artifacts:")
     for name in artifact_names:
-        _log.log(f"    - {name}")
+        log.info("    - %s", name)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -9,7 +10,7 @@ import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from captain.log import err
+log = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -58,7 +59,7 @@ def get_arch_info(arch: str) -> ArchInfo:
                 strip_prefix="aarch64-linux-gnu-",
             )
         case _:
-            err(f"Unsupported architecture: {arch}")
+            log.error("Unsupported architecture: %s", arch)
             sys.exit(1)
 
 

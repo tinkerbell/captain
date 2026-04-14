@@ -1,13 +1,14 @@
 .PHONY: lint fmt lint-install
 
 lint-install:
-	pip install -r requirements.txt -r requirements-dev.txt
+	uv sync --extra dev
 
 lint:
-	ruff check .
-	ruff format --check .
-	pyright .
+	uv tool run ruff check .
+	uv tool run ruff format --check .
+	uv sync --extra dev
+	uv run pyright
 
 fmt:
-	ruff check --fix .
-	ruff format .
+	uv tool run ruff check --fix .
+	uv tool run ruff format .

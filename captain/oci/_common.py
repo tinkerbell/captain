@@ -5,10 +5,6 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from captain.log import for_stage
-
-_default_log = for_stage("release")
-
 _ARCHES = ("amd64", "arm64")
 
 
