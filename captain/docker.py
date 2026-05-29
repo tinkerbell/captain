@@ -59,7 +59,7 @@ def build_builder(cfg: Config) -> None:
         return
 
     log.info("Building Docker image '%s'...", cfg.builder_image)
-    cmd = ["docker", "buildx", "build"]
+    cmd = ["docker", "buildx", "build", "--load"]
     if cfg.no_cache:
         cmd.append("--no-cache")
     cmd.extend(
@@ -88,7 +88,7 @@ def build_release_image(cfg: Config) -> None:
         return
 
     log.info("Building Docker image '%s'...", RELEASE_IMAGE)
-    cmd = ["docker", "buildx", "build", "-f", str(cfg.project_dir / "Dockerfile.release")]
+    cmd = ["docker", "buildx", "build", "--load", "-f", str(cfg.project_dir / "Dockerfile.release")]
     if cfg.no_cache:
         cmd.append("--no-cache")
     cmd.extend(["--progress=plain"])

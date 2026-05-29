@@ -3,7 +3,11 @@
 # Usage: docker build -t captainos-builder . && docker run --rm --privileged -v $(pwd):/work captainos-builder build
 FROM debian:trixie
 
-ARG MKOSI_VERSION=v26
+# Pinned post-v26 to pick up systemd/mkosi@1f811f05 ("tools: move grub-pc-bin
+# to arch-specific drop-in"), which fixes arm64 builds failing on the default
+# tools-tree pulling in grub-pc-bin (BIOS GRUB, x86-only). Bump to a release
+# tag once v27 lands.
+ARG MKOSI_VERSION=1f811f0524be3096872e79161c8e6ab3e7c2bb1f
 
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -74,12 +78,17 @@ RUN ln -sf ~/.local/bin/mkosi /usr/bin/mkosi
 # Verify mkosi is functional
 RUN mkosi --version
 
-# Prime uv's cache with our pyproject.toml to speed up runtime
-COPY pyproject.toml /tmp/pyproject.toml
-COPY captain /tmp/captain
-COPY build.py /tmp/build.py
-WORKDIR /tmp
-RUN uv --verbose run build.py --help
+# Install project dependencies into a persistent venv so that
+# `uv run` inside the container reuses it instead of recreating one.
+COPY pyproject.toml /opt/captain/pyproject.toml
+COPY captain /opt/captain/captain
+COPY build.py /opt/captain/build.py
+RUN uv venv /opt/captain-venv && \
+    VIRTUAL_ENV=/opt/captain-venv uv pip install --project /opt/captain /opt/captain
+
+# Point uv at the pre-built venv for all future runs.
+ENV VIRTUAL_ENV=/opt/captain-venv
+ENV UV_PROJECT_ENVIRONMENT=/opt/captain-venv
 
 WORKDIR /work
 ENTRYPOINT ["mkosi"]

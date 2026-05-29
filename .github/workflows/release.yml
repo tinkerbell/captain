@@ -18,7 +18,7 @@ jobs:
           fetch-depth: 0
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -28,7 +28,7 @@ jobs:
         run: cat .github/config.env >> "$GITHUB_ENV"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v8.1.0
 
       - name: Pull release artifacts (combined)
         env:
