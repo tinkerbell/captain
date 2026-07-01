@@ -240,7 +240,9 @@ tinkerbell:
   --tink-worker-id ID              machine / worker ID
   --tink-tls BOOL                  enable TLS to tink-server (default: false)
   --tink-insecure-tls BOOL         allow insecure TLS (default: true)
-  --tink-insecure-registries LIST  comma-separated insecure registries
+  --tink-insecure-registries LIST  comma-separated insecure registries; each registry may be prefixed
+                                   with http:// (default) or https:// (HTTPS with skip TLS verify).
+                                   Example: foo.local,http://bar.local:5000,https://baz.local
   --tink-registry-username USER    registry auth username
   --tink-registry-password PASS    registry auth password
   --tink-syslog-host HOST          remote syslog host
