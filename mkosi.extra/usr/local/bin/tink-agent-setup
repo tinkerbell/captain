@@ -112,6 +112,21 @@ wait_for_containerd() {
     log_info "containerd is ready"
 }
 
+# --- Log into the registry (if credentials were provided) ---
+registry_login() {
+    if [[ -z "${REGISTRY_USERNAME:-}" || -z "${REGISTRY_PASSWORD:-}" ]]; then
+        return
+    fi
+
+    local login_host="${DOCKER_REGISTRY:-${TINK_IMAGE%%/*}}"
+    log_info "logging into registry" "host" "${login_host}"
+    if ! printf '%s' "${REGISTRY_PASSWORD}" \
+        | nerdctl login "${login_host}" -u "${REGISTRY_USERNAME}" --password-stdin; then
+        log_error "registry login failed" "host" "${login_host}"
+        exit 1
+    fi
+}
+
 # --- Pull the tink-agent image ---
 pull_image() {
     log_info "pulling tink-agent image" "image" "${TINK_IMAGE}"
@@ -125,6 +140,8 @@ pull_image() {
         log_info "image already present locally, skipping pull"
         return
     fi
+
+    registry_login
 
     while true; do
         attempt=$((attempt + 1))
