@@ -89,7 +89,7 @@ configure_insecure_registries() {
         registry=$(echo "$registry" | xargs)  # trim whitespace
         [[ -z "$registry" ]] && continue
 
-        local scheme host
+        local scheme host port
         case "$registry" in
             https://*) scheme="https"; host="${registry#https://}" ;;
             http://*)  scheme="http";  host="${registry#http://}"  ;;
@@ -97,13 +97,23 @@ configure_insecure_registries() {
         esac
         host="${host%/}"  # strip any trailing slash
 
+        # If host has a port set, set the port var to that value otherwise use default 443 or 80 based on scheme
+        if [[ "$host" == *:* ]]; then
+            port="${host##*:}"
+            host="${host%:*}"
+        elif [[ "$scheme" == "https" ]]; then
+            port=443
+        else
+            port=80
+        fi
+
         mkdir -p "${certs_dir}/${host}"
         if [[ "$scheme" == "https" ]]; then
             # HTTPS registry with an untrusted cert (private CA / self-signed).
             cat > "${certs_dir}/${host}/hosts.toml" <<EOF
 server = "https://${host}"
 
-[host."https://${host}"]
+[host."https://${host}:${port}"]
   capabilities = ["pull", "resolve", "push"]
   skip_verify = true
 EOF
@@ -113,11 +123,11 @@ EOF
             cat > "${certs_dir}/${host}/hosts.toml" <<EOF
 server = "http://${host}"
 
-[host."http://${host}"]
+[host."http://${host}:${port}"]
   capabilities = ["pull", "resolve", "push"]
 EOF
         fi
-        log_info "configured insecure registry" "host" "${host}" "scheme" "${scheme}"
+        log_info "configured insecure registry" "host" "${host}" "port" "${port}" "scheme" "${scheme}"
     done
 }
 
