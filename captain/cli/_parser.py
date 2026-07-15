@@ -522,7 +522,11 @@ def _add_tink_flags(parser: configargparse.ArgParser) -> None:
         env_var="TINK_INSECURE_REGISTRIES",
         metavar="LIST",
         default="",
-        help="comma-separated insecure registries",
+        help=(
+            "comma-separated insecure registries; each registry may be prefixed "
+            "with http:// (default) or https:// (HTTPS with skip TLS verify). "
+            "Example: foo.local,http://bar.local:5000,https://baz.local"
+        ),
     )
     g.add_argument(
         "--tink-registry-username",

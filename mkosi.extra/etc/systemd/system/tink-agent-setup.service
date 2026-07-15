@@ -6,12 +6,25 @@ Requires=containerd.service
 # Only start when Tinkerbell parameters are on the kernel command line
 ConditionKernelCommandLine=|tink_worker_image
 ConditionKernelCommandLine=|docker_registry
+# Allow up to 10 restart attempts within 10 minutes before giving up.
+StartLimitIntervalSec=600
+StartLimitBurst=10
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/tink-agent-setup
 TimeoutStartSec=300
+
+# Retry to prevent transient failures from preventing tink-agent from starting
+# with exponential backoff between attempts.
+Restart=on-failure
+RestartSec=5
+RestartMaxDelaySec=60
+RestartSteps=5
+
+# When setup finally succeeds, explicitly restart tink-agent to get past tink-agent dependency error preventing it from starting
+ExecStartPost=-/bin/systemctl --no-block start tink-agent.service
 
 # Logging
 StandardOutput=journal

@@ -9,7 +9,12 @@
 #   registry_password=<pass>        Registry auth password
 #   tinkerbell_tls=<bool>           Enable TLS for tink-server
 #   tinkerbell_insecure_tls=<bool>  Allow insecure TLS
-#   insecure_registries=<list>      Comma-separated insecure registries
+#   insecure_registries=<list>      Comma-separated insecure registries. Each
+#                                   registry may be prefixed with a scheme:
+#                                     http://host  -> plain HTTP (no TLS)
+#                                     https://host -> HTTPS with skip_verify
+#                                     host         -> plain HTTP (default,
+#                                                     matches prior behaviour)
 
 set -euo pipefail
 
@@ -83,15 +88,46 @@ configure_insecure_registries() {
     for registry in "${REGISTRIES[@]}"; do
         registry=$(echo "$registry" | xargs)  # trim whitespace
         [[ -z "$registry" ]] && continue
-        mkdir -p "${certs_dir}/${registry}"
-        cat > "${certs_dir}/${registry}/hosts.toml" <<EOF
-server = "http://${registry}"
 
-[host."http://${registry}"]
+        local scheme host port
+        case "$registry" in
+            https://*) scheme="https"; host="${registry#https://}" ;;
+            http://*)  scheme="http";  host="${registry#http://}"  ;;
+            *)         scheme="http";  host="$registry"            ;;
+        esac
+        host="${host%/}"  # strip any trailing slash
+
+        # If host has a port set, set the port var to that value otherwise use default 443 or 80 based on scheme
+        if [[ "$host" == *:* ]]; then
+            port="${host##*:}"
+            host="${host%:*}"
+        elif [[ "$scheme" == "https" ]]; then
+            port=443
+        else
+            port=80
+        fi
+
+        mkdir -p "${certs_dir}/${host}"
+        if [[ "$scheme" == "https" ]]; then
+            # HTTPS registry with an untrusted cert (private CA / self-signed).
+            cat > "${certs_dir}/${host}/hosts.toml" <<EOF
+server = "https://${host}"
+
+[host."https://${host}:${port}"]
   capabilities = ["pull", "resolve", "push"]
   skip_verify = true
 EOF
-        log_info "configured insecure registry" "registry" "${registry}"
+        else
+            # Plain HTTP: skip_verify is a TLS-only option and, on an http://
+            # server, makes containerd attempt HTTPS first and breaks login.
+            cat > "${certs_dir}/${host}/hosts.toml" <<EOF
+server = "http://${host}"
+
+[host."http://${host}:${port}"]
+  capabilities = ["pull", "resolve", "push"]
+EOF
+        fi
+        log_info "configured insecure registry" "host" "${host}" "port" "${port}" "scheme" "${scheme}"
     done
 }
 
@@ -112,6 +148,21 @@ wait_for_containerd() {
     log_info "containerd is ready"
 }
 
+# --- Log into the registry (if credentials were provided) ---
+registry_login() {
+    if [[ -z "${REGISTRY_USERNAME:-}" || -z "${REGISTRY_PASSWORD:-}" ]]; then
+        return
+    fi
+
+    local login_host="${DOCKER_REGISTRY:-${TINK_IMAGE%%/*}}"
+    log_info "logging into registry" "host" "${login_host}"
+    if ! printf '%s' "${REGISTRY_PASSWORD}" \
+        | nerdctl login "${login_host}" -u "${REGISTRY_USERNAME}" --password-stdin; then
+        log_error "registry login failed" "host" "${login_host}"
+        exit 1
+    fi
+}
+
 # --- Pull the tink-agent image ---
 pull_image() {
     log_info "pulling tink-agent image" "image" "${TINK_IMAGE}"
@@ -125,6 +176,8 @@ pull_image() {
         log_info "image already present locally, skipping pull"
         return
     fi
+
+    registry_login
 
     while true; do
         attempt=$((attempt + 1))
