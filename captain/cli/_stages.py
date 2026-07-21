@@ -103,10 +103,10 @@ def _build_mkosi_stage(cfg: Config, extra_args: list[str]) -> None:
         return
 
     # --- idempotency --------------------------------------------------
-    initramfs_image = cfg.initramfs_output / "image.cpio.zst"
+    existing = sorted(cfg.initramfs_output.glob("*.cpio*"))
     force = "--force" in cfg.mkosi_args
-    if initramfs_image.is_file() and not force:
-        log.info("Initramfs already built: %s (use --force to rebuild)", initramfs_image)
+    if existing and not force:
+        log.info("Initramfs already built: %s (use --force to rebuild)", existing[0])
         return
 
     mkosi_args = list(cfg.mkosi_args) + list(extra_args)
