@@ -4,6 +4,7 @@ Name=eth*
 
 [Network]
 DHCP=yes
+LLDP=yes
 
 [DHCPv4]
 UseDNS=yes
