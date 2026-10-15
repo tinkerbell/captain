@@ -13,7 +13,6 @@ import jinja2
 from rich.table import Table
 
 import captain
-from captain import iso
 from captain.artifacts import OutputArchArtifact, OutputArchArtifactType
 from captain.config import Config
 
@@ -198,14 +197,7 @@ class BaseFlavor(Protocol):
                 OutputArchArtifact(
                     type=OutputArchArtifactType.FILE,
                     name=f"captainos-{self.cfg.flavor_id}-{output_arch}.iso",
-                ),
-                OutputArchArtifact(
-                    type=OutputArchArtifactType.FILE,
-                    name=(
-                        f"captainos-{self.cfg.flavor_id}-{output_arch}.iso"
-                        f"{iso.BOOTSTRAP_LAYOUT_SUFFIX}"
-                    ),
-                ),
+                )
             ]
 
         self.add_arch_dtb_artifacts(artifacts, output_arch)

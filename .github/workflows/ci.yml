@@ -309,9 +309,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: iso-${{ matrix.FLAVOR_ID }}-${{ matrix.arch }}
-          path: |
-            out/captainos-${{ matrix.FLAVOR_ID }}-${{ matrix.output_arch }}.iso
-            out/captainos-${{ matrix.FLAVOR_ID }}-${{ matrix.output_arch }}.iso.layout.json
+          path: out/captainos-${{ matrix.FLAVOR_ID }}-${{ matrix.output_arch }}.iso
           retention-days: 1
 
       # -------------------------------------------------------------------

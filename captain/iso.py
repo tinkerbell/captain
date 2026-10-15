@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import mmap
-import secrets
 import shutil
 import textwrap
 from pathlib import Path
@@ -33,21 +30,31 @@ _CONSOLE_ARGS = {
 # substitutes its bytes per host while serving the shared ISO, so its size is
 # fixed at build time and never changes afterwards.
 #
-# Local to this build: Tinkerbell locates the slot by offset, not by name, so
-# this only has to agree with the initrd line in _grub_cfg.
+# Local to this build: Tinkerbell finds the slot by its sector headers, not by
+# name, so this only has to agree with the initrd line in _grub_cfg.
 BOOTSTRAP_SLOT_ISO_PATH = "/boot/bootstrap.cpio"
 
-# Reserved capacity of the slot. Raising it requires a new ISO release; changes
-# that fit within it do not. Published in the layout rather than assumed by
-# Tinkerbell, so it may differ per flavor.
+# Reserved capacity of the slot, a whole number of sectors. Raising it requires
+# a new ISO release; changes that fit within it do not. Tinkerbell reads it from
+# the sector headers, so it may differ per flavor.
 BOOTSTRAP_SLOT_CAPACITY = 4 * 1024 * 1024
 
-# The next two are the contract with Tinkerbell, along with the field names
-# written by _write_bootstrap_layout. Tinkerbell treats a schema it does not
-# know as an ISO with no slot, so bump the version only when the meaning of
-# existing fields changes.
-BOOTSTRAP_LAYOUT_VERSION = 1
-BOOTSTRAP_LAYOUT_SUFFIX = ".layout.json"
+# The slot contract with Tinkerbell (smee/internal/bootstrap/slot.go). Every
+# sector of the unpersonalized slot begins with a header identifying it, so
+# Tinkerbell finds the slot in the bytes it serves, with no metadata to publish.
+# Each header is a newc TRAILER!!! record, an empty archive, so an
+# unpersonalized slot extracts as nothing and the ISO still boots. The record's
+# otherwise unused fields carry:
+#
+#   c_mtime, c_devmajor, c_devminor: BOOTSTRAP_SLOT_MAGIC
+#   c_rdevmajor:                     BOOTSTRAP_SLOT_VERSION
+#   c_rdevminor:                     the sector's index
+#   c_check:                         the slot's sector count
+#
+# Bump the version only when the meaning of these fields changes.
+BOOTSTRAP_SLOT_SECTOR_SIZE = 2048
+BOOTSTRAP_SLOT_VERSION = 1
+BOOTSTRAP_SLOT_MAGIC = (0x1E2D339C, 0xF7CBD880, 0x9A9E3913)
 
 
 def _grub_cfg(arch: str) -> str:
@@ -64,91 +71,60 @@ def _grub_cfg(arch: str) -> str:
     """)
 
 
-def _newc_entry(ino: int, mode: int, nlink: int, name: str, data: bytes) -> bytes:
-    """Serialize one `newc` (070701) CPIO record, padded to 4-byte alignment.
+def _slot_sector_header(index: int, count: int) -> bytes:
+    """Return the header of sector *index* of a *count* sector slot."""
+    magic = BOOTSTRAP_SLOT_MAGIC
+    name = b"TRAILER!!!\0"
+    # ino, mode, uid, gid, nlink, mtime, filesize, devmajor, devminor
+    fields = [0, 0, 0, 0, 1, magic[0], 0, magic[1], magic[2]]
+    # rdevmajor, rdevminor, namesize, check
+    fields += [BOOTSTRAP_SLOT_VERSION, index, len(name), count]
+    out = b"070701" + b"".join(b"%08X" % f for f in fields) + name
+    return out + b"\0" * (-len(out) % 4)
 
-    Tinkerbell has its own serializer for the archives it writes into the slot.
-    Both sides only have to emit valid `newc` for the kernel to extract; they
-    exchange no values. The magic, the 110-byte header and the TRAILER!!! entry
-    are fixed by the format.
+
+def _slot_placeholder() -> bytes:
+    """Return the unpersonalized slot: every sector starts with its header."""
+    size = BOOTSTRAP_SLOT_SECTOR_SIZE
+    count = BOOTSTRAP_SLOT_CAPACITY // size
+    return b"".join(_slot_sector_header(i, count).ljust(size, b"\0") for i in range(count))
+
+
+def _stage_bootstrap_slot(boot_dir: Path) -> None:
+    """Reserve the bootstrap slot in the ISO staging tree."""
+    if BOOTSTRAP_SLOT_CAPACITY % BOOTSTRAP_SLOT_SECTOR_SIZE:
+        log.error("Bootstrap slot capacity %d is not whole sectors", BOOTSTRAP_SLOT_CAPACITY)
+        raise SystemExit(1)
+    (boot_dir / Path(BOOTSTRAP_SLOT_ISO_PATH).name).write_bytes(_slot_placeholder())
+
+
+def check_bootstrap_slot(iso_path: Path) -> int:
+    """Return the slot's offset in *iso_path*, checking Tinkerbell will find exactly it.
+
+    The slot must be stored intact and contiguous, and no other bytes in the
+    ISO may look like one of its sector headers. Raises ValueError otherwise.
     """
-    fields = [ino, mode, 0, 0, nlink, 0, len(data), 0, 0, 0, 0, len(name) + 1, 0]
-    out = b"070701" + b"".join(b"%08X" % f for f in fields) + name.encode() + b"\0"
-    out += b"\0" * (-len(out) % 4)
-    out += data
-    out += b"\0" * (-len(out) % 4)
-    return out
-
-
-def _empty_cpio() -> bytes:
-    """Return a valid, empty `newc` archive: nothing but the mandatory trailer."""
-    return _newc_entry(0, 0, 1, "TRAILER!!!", b"")
-
-
-def _stage_bootstrap_slot(boot_dir: Path) -> bytes:
-    """Reserve the bootstrap slot and return the marker identifying it.
-
-    The marker is unique per build so the slot can be located unambiguously in
-    the finished ISO without parsing the ISO filesystem. It is overwritten once
-    its offset has been recorded, so it never ships.
-    """
-    marker = b"CAPTAINOS-BOOTSTRAP-SLOT-v1:" + secrets.token_hex(16).encode()
-    slot = boot_dir / Path(BOOTSTRAP_SLOT_ISO_PATH).name
-    with slot.open("wb") as fh:
-        fh.write(marker)
-        fh.truncate(BOOTSTRAP_SLOT_CAPACITY)
-    return marker
-
-
-def _locate_bootstrap_slot(iso_path: Path, marker: bytes) -> int:
-    """Return the absolute byte offset of the bootstrap slot within *iso_path*."""
+    placeholder = _slot_placeholder()
+    # The part of every header that does not vary: the newc magic through c_rdevmajor.
+    prefix = placeholder[: 6 + 10 * 8]
+    count = BOOTSTRAP_SLOT_CAPACITY // BOOTSTRAP_SLOT_SECTOR_SIZE
     with iso_path.open("rb") as fh, mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-        offset = mm.find(marker)
+        offset = mm.find(placeholder)
         if offset < 0:
-            log.error("Bootstrap slot marker not found in %s", iso_path)
-            raise SystemExit(1)
-        if mm.find(marker, offset + 1) >= 0:
-            log.error("Bootstrap slot marker is not unique in %s", iso_path)
-            raise SystemExit(1)
-    if offset % 2048 != 0:
-        log.error("Bootstrap slot at %d is not sector aligned in %s", offset, iso_path)
-        raise SystemExit(1)
-    if offset + BOOTSTRAP_SLOT_CAPACITY > iso_path.stat().st_size:
-        log.error("Bootstrap slot at %d extends past the end of %s", offset, iso_path)
-        raise SystemExit(1)
+            raise ValueError(f"bootstrap slot is not stored intact in {iso_path}")
+        # So that each sector read of virtual media holds whole sector headers.
+        if offset % BOOTSTRAP_SLOT_SECTOR_SIZE:
+            raise ValueError(f"bootstrap slot at {offset} is not sector aligned in {iso_path}")
+        headers = 0
+        at = mm.find(prefix)
+        while at >= 0:
+            headers += 1
+            at = mm.find(prefix, at + 1)
+    if headers != count:
+        raise ValueError(
+            f"found {headers} bootstrap slot sector headers in {iso_path}, want {count}"
+        )
     return offset
-
-
-def _finalize_bootstrap_slot(iso_path: Path, offset: int, marker: bytes) -> None:
-    """Replace the marker with an empty archive so an unpatched ISO still boots."""
-    payload = _empty_cpio()
-    payload = payload.ljust(max(len(marker), len(payload)), b"\0")
-    with iso_path.open("r+b") as fh:
-        fh.seek(offset)
-        fh.write(payload)
-
-
-def _write_bootstrap_layout(iso_path: Path, offset: int) -> Path:
-    """Publish the slot's location, bound to this exact ISO by size and digest."""
-    digest = hashlib.sha256()
-    with iso_path.open("rb") as fh:
-        for block in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(block)
-
-    layout = {
-        "version": BOOTSTRAP_LAYOUT_VERSION,
-        "iso": {"size": iso_path.stat().st_size, "sha256": digest.hexdigest()},
-        "slot": {
-            "path": BOOTSTRAP_SLOT_ISO_PATH,
-            "offset": offset,
-            "capacity": BOOTSTRAP_SLOT_CAPACITY,
-        },
-    }
-    layout_path = iso_path.with_name(iso_path.name + BOOTSTRAP_LAYOUT_SUFFIX)
-    tmp_path = layout_path.with_name(layout_path.name + ".tmp")
-    tmp_path.write_text(json.dumps(layout, indent=2) + "\n")
-    tmp_path.replace(layout_path)
-    return layout_path
 
 
 def _find_vmlinuz(cfg: Config) -> Path:
@@ -186,9 +162,9 @@ def build(cfg: Config) -> None:
     ``grub-mkrescue`` turns this into a bootable ISO with an embedded
     EFI System Partition.
 
-    ``bootstrap.cpio`` is a fixed-capacity, uncompressed CPIO archive loaded as
-    a second initrd. Tinkerbell overwrites it in place while serving the ISO, so
-    per-host data needs no ISO rebuild.
+    ``bootstrap.cpio`` is a fixed-capacity slot loaded as a second initrd: a run
+    of empty CPIO archives, one per sector, that Tinkerbell overwrites in place
+    while serving the ISO, so per-host data needs no ISO rebuild.
     """
     vmlinuz = _find_vmlinuz(cfg)
     initramfs = _find_initramfs(cfg)
@@ -209,14 +185,18 @@ def build(cfg: Config) -> None:
 
     shutil.copy2(vmlinuz, boot_dir / "vmlinuz")
     shutil.copy2(initramfs, boot_dir / "initramfs")
-    marker = _stage_bootstrap_slot(boot_dir)
+    _stage_bootstrap_slot(boot_dir)
 
     (grub_dir / "grub.cfg").write_text(_grub_cfg(cfg.arch))
 
     iso_dir = ensure_dir(cfg.iso_output)
     iso_path = iso_dir / f"captainos-{cfg.flavor_id}-{cfg.arch_info.output_arch}.iso"
-    # The layout is written last, so its presence marks a complete ISO.
-    iso_path.with_name(iso_path.name + BOOTSTRAP_LAYOUT_SUFFIX).unlink(missing_ok=True)
+    # A later build reuses any ISO at iso_path whose slot checks out, and the
+    # slot check cannot tell a truncated ISO from a complete one. So the ISO is
+    # built and checked under another name, and only moved into place once both
+    # succeed. The suffix keeps it out of the *.iso glob in collect_iso.
+    partial_path = iso_path.with_name(iso_path.name + ".partial")
+    partial_path.unlink(missing_ok=True)
 
     log.info("Building ISO with grub-mkrescue (%s)...", grub_platform)
     grub_mkrescue = shutil.which("grub-mkrescue")
@@ -224,26 +204,31 @@ def build(cfg: Config) -> None:
         log.error("grub-mkrescue not found. Install grub-common or use ISO_MODE=docker.")
         raise SystemExit(1)
 
-    run(
-        [
-            grub_mkrescue,
-            f"--directory=/usr/lib/grub/{grub_platform}",
-            "-o",
-            str(iso_path),
-            str(staging),
-        ]
-    )
+    try:
+        run(
+            [
+                grub_mkrescue,
+                f"--directory=/usr/lib/grub/{grub_platform}",
+                "-o",
+                str(partial_path),
+                str(staging),
+            ]
+        )
+        try:
+            offset = check_bootstrap_slot(partial_path)
+        except ValueError as err:
+            log.error("%s", err)
+            raise SystemExit(1) from err
+        partial_path.replace(iso_path)
+    except BaseException:
+        partial_path.unlink(missing_ok=True)
+        raise
 
     size_mb = iso_path.stat().st_size / (1024 * 1024)
     log.info("ISO created: %s (%.1fM)", iso_path, size_mb)
-
-    offset = _locate_bootstrap_slot(iso_path, marker)
-    _finalize_bootstrap_slot(iso_path, offset, marker)
-    layout_path = _write_bootstrap_layout(iso_path, offset)
     log.info(
-        "Bootstrap slot %s reserved at offset %d (%d bytes); layout: %s",
+        "Bootstrap slot %s reserved at offset %d (%d bytes)",
         BOOTSTRAP_SLOT_ISO_PATH,
         offset,
         BOOTSTRAP_SLOT_CAPACITY,
-        layout_path,
     )

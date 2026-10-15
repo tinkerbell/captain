@@ -202,10 +202,14 @@ def _build_iso_stage(cfg: Config) -> None:
 
     # --- idempotency --------------------------------------------------
     iso_path = cfg.iso_output / f"captainos-{cfg.flavor_id}-{cfg.arch_info.output_arch}.iso"
-    layout_path = iso_path.with_name(iso_path.name + iso.BOOTSTRAP_LAYOUT_SUFFIX)
-    if iso_path.is_file() and layout_path.is_file() and not cfg.force_iso:
-        log.info("ISO already built: %s (use --force-iso to rebuild)", iso_path)
-        return
+    if iso_path.is_file() and not cfg.force_iso:
+        try:
+            iso.check_bootstrap_slot(iso_path)
+        except ValueError as err:
+            log.info("Rebuilding ISO: %s", err)
+        else:
+            log.info("ISO already built: %s (use --force-iso to rebuild)", iso_path)
+            return
 
     # --- native -------------------------------------------------------
     if cfg.iso_mode == "native":

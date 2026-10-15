@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
-from captain import iso
 from captain.config import Config
 from captain.util import ensure_dir
 
@@ -89,17 +88,6 @@ def collect_iso(cfg: Config) -> None:
         iso_dst = out / f"captainos-{cfg.flavor_id}-{cfg.arch_info.output_arch}.iso"
         shutil.copy2(iso_src, iso_dst)
         log.info("iso: %s (%s)", iso_dst, _human_size(iso_dst.stat().st_size))
-
-        # The bootstrap slot's offset is only meaningful for this exact ISO, so
-        # the layout must be distributed with it.
-        layout_src = iso_src.with_name(iso_src.name + iso.BOOTSTRAP_LAYOUT_SUFFIX)
-        if layout_src.is_file():
-            layout_dst = iso_dst.with_name(iso_dst.name + iso.BOOTSTRAP_LAYOUT_SUFFIX)
-            shutil.copy2(layout_src, layout_dst)
-            log.info("iso layout: %s", layout_dst)
-        else:
-            log.error("No bootstrap layout metadata found next to %s", iso_src)
-            raise SystemExit(1)
 
 
 def collect_checksums(
