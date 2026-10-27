@@ -24,6 +24,11 @@ set -euo pipefail
 
 NETWORK_DIR="/run/systemd/network"
 
+# Metric for the generated default route. Lower than the RouteMetric=100 used by
+# /etc/systemd/network/80-dhcp.network, so the ipam= route wins over any DHCP
+# lease picked up on another interface (USB NIC, second port, ...).
+ROUTE_METRIC="50"
+
 # --- JSON logging (same style as tink-agent-setup) ---
 _json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g'; }
 _log() {
@@ -193,11 +198,8 @@ Address=${IPAM_IP}/${cidr}
 EOF
     fi
 
-    # Append optional fields
-    if [[ -n "$IPAM_GATEWAY" ]]; then
-        echo "Gateway=${IPAM_GATEWAY}" >> "$network_file"
-    fi
-
+    # Append optional [Network] fields. The default route is written last, in its
+    # own [Route] section, so nothing that belongs in [Network] may be added below.
     # DNS servers (comma-separated → one per line)
     if [[ -n "$IPAM_DNS" ]]; then
         IFS=',' read -ra dns_list <<< "$IPAM_DNS"
@@ -220,6 +222,18 @@ EOF
         for domain in "${search_list[@]}"; do
             echo "Domains=${domain}" >> "$network_file"
         done
+    fi
+
+    # Default route, with an explicit metric so it is preferred over DHCP routes.
+    # [Network] Gateway= takes no metric, hence the separate [Route] section.
+    if [[ -n "$IPAM_GATEWAY" ]]; then
+        cat >> "$network_file" <<EOF
+
+[Route]
+Gateway=${IPAM_GATEWAY}
+Metric=${ROUTE_METRIC}
+EOF
+        log_info "wrote default route" "gateway" "$IPAM_GATEWAY" "metric" "$ROUTE_METRIC"
     fi
 
     log_info "wrote static network config" "file" "$network_file" "address" "${IPAM_IP}/${cidr}"
