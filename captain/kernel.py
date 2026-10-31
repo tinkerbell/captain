@@ -1,15 +1,13 @@
 """Kernel download, configuration, compilation, and packaging.
 
 Heavy lifting (make) is still done via subprocess — only the
-orchestration is in Python.  Called directly by ``cli.build_kernel_stage``
+orchestration is in Python.  Called directly by ``stages.build_kernel_stage``
 in both native and Docker modes (inside the container we re-enter
 the CLI with all modes forced to native).
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import os
 import re
@@ -19,79 +17,15 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from rich.progress import (
-    BarColumn,
-    DownloadColumn,
-    Progress,
-    TextColumn,
-    TimeRemainingColumn,
-    TransferSpeedColumn,
-)
-
-from captain import console
-from captain.config import DEFAULT_KERNEL_VERSION, Config
+from captain import progress
+from captain.config import Config
 from captain.util import ensure_dir, run, safe_extractall
 
 KERNEL_BUILD_BASE_PATH = "/work/kernel-build"
 
-RELEASES_JSON_URL = "https://www.kernel.org/releases.json"
-
 log = logging.getLogger(__name__)
 
 _DOWNLOAD_TIMEOUT = 60  # seconds
-
-
-def _version_tuple(version: str) -> tuple[int, ...]:
-    """Parse a dotted kernel version into an int tuple for comparison."""
-    parts: list[int] = []
-    for piece in version.split("."):
-        # stop at the first non-numeric component (e.g. rc suffixes)
-        if not piece.isdigit():
-            break
-        parts.append(int(piece))
-    return tuple(parts)
-
-
-def latest_branch_version(branch: str | None = None) -> str:
-    """Return the newest kernel.org point release of *branch* (e.g. ``"6.18"``).
-
-    Consults kernel.org's ``releases.json``, which lists the latest release of
-    each active branch. *branch* defaults to the ``<major>.<minor>`` of
-    :data:`DEFAULT_KERNEL_VERSION`. Falls back to ``DEFAULT_KERNEL_VERSION`` on
-    any network/parse failure or when the branch is not listed — never returns
-    an empty string, so callers/CI always get a buildable version.
-    """
-    if branch is None:
-        branch = ".".join(DEFAULT_KERNEL_VERSION.split(".")[:2])
-
-    try:
-        req = urllib.request.Request(RELEASES_JSON_URL)
-        with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode())
-    except (urllib.error.URLError, json.JSONDecodeError, OSError) as exc:
-        log.warning(
-            "Could not fetch %s (%s); using default %s",
-            RELEASES_JSON_URL,
-            exc,
-            DEFAULT_KERNEL_VERSION,
-        )
-        return DEFAULT_KERNEL_VERSION
-
-    prefix = f"{branch}."
-    matches = [
-        r["version"]
-        for r in data.get("releases", [])
-        if isinstance(r.get("version"), str) and r["version"].startswith(prefix)
-    ]
-    if not matches:
-        log.warning(
-            "No kernel.org release for branch %s; using default %s", branch, DEFAULT_KERNEL_VERSION
-        )
-        return DEFAULT_KERNEL_VERSION
-
-    latest = max(matches, key=_version_tuple)
-    log.info("Latest kernel for branch %s is %s", branch, latest)
-    return latest
 
 
 def _download_with_progress(url: str, filename: Path) -> None:
@@ -99,22 +33,10 @@ def _download_with_progress(url: str, filename: Path) -> None:
     req = urllib.request.Request(url)
     with urllib.request.urlopen(req, timeout=_DOWNLOAD_TIMEOUT) as resp:
         total = int(resp.headers.get("Content-Length", 0)) or None
-        with Progress(
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            DownloadColumn(),
-            TransferSpeedColumn(),
-            TimeRemainingColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("    Downloading", total=total)
-            with open(filename, "wb") as out:
-                while True:
-                    buf = resp.read(8192)
-                    if not buf:
-                        break
-                    out.write(buf)
-                    progress.update(task, advance=len(buf))
+        with progress.transfer("    Downloading", total) as advance, open(filename, "wb") as out:
+            while buf := resp.read(1 << 20):
+                out.write(buf)
+                advance(len(buf))
 
 
 def download_kernel(cfg: Config, dest_dir: Path) -> Path:
@@ -157,7 +79,7 @@ def _kernel_branch(version: str) -> str:
     return f"{parts[0]}.{parts[1]}.y"
 
 
-def _find_defconfig(cfg: Config) -> Path:
+def find_defconfig(cfg: Config) -> Path:
     """Locate the defconfig for the current kernel version and architecture."""
     ai = cfg.arch_info
     branch = _kernel_branch(cfg.kernel_version)
@@ -188,7 +110,7 @@ def _find_defconfig(cfg: Config) -> Path:
 def configure_kernel(cfg: Config, src_dir: Path) -> None:
     """Apply defconfig and run olddefconfig."""
     ai = cfg.arch_info
-    defconfig = _find_defconfig(cfg)
+    defconfig = find_defconfig(cfg)
 
     make_env = {"ARCH": ai.kernel_arch}
     if ai.cross_compile:
@@ -275,19 +197,13 @@ def build_kernel(cfg: Config, src_dir: Path) -> str:
 
 
 def obtain_target_artifact_path(cfg, ensure_parent: bool = False) -> Path:
+    from captain.cache import kernel_key
+
     if ensure_parent:
         ensure_dir(cfg.kernel_output)
 
-    # let's hash:
-    # 1) the input defconfig
-    defconfig = _find_defconfig(cfg)
-    hex_digest_defconfig = hashlib.sha256(defconfig.read_bytes()).hexdigest()
-    # 2) the contents of this script (as an imperfect proxy for the build logic)
-    script_path = Path(__file__)
-    hex_digest_script = hashlib.sha256(script_path.read_bytes()).hexdigest()
-    # Combine and shorten to 8 chars for the final version hash
-    version_hash = hashlib.sha256((hex_digest_defconfig + hex_digest_script).encode()).hexdigest()
-    version_hash_shorten = version_hash[:8]
+    # The build-cache key covers defconfig, this module and the toolchain (Dockerfile).
+    version_hash_shorten = kernel_key(cfg).digest[:8]
 
     return (
         cfg.kernel_output / f"linux-image-{cfg.kernel_version}-captainos"

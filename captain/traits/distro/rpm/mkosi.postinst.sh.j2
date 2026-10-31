@@ -1,0 +1,7 @@
+#!/bin/bash
+# RPM-family post-install: runs outside the image chroot; use 'mkosi-chroot'.
+set -euo pipefail
+
+# Ensure CA certificate bundle is generated (also picks up custom/files anchors).
+log info "Extracting CA trust bundle..."
+mkosi-chroot update-ca-trust extract

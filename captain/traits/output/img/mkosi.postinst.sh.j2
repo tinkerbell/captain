@@ -1,0 +1,115 @@
+#!/bin/bash
+# mkosi.postinst (img output) — builds the distro's own initrd and the boot setup.
+# Runs outside the image chroot; use 'mkosi-chroot' to run commands inside it.
+set -euo pipefail
+
+# Exactly one kernel is expected in the image.
+{% raw %}
+mapfile -t kernel_dirs < <(find "${BUILDROOT}/usr/lib/modules" -mindepth 1 -maxdepth 1 -type d | sort -V)
+if [[ ${#kernel_dirs[@]} -ne 1 ]]; then
+	log error "Expected exactly one kernel in /usr/lib/modules, found: ${kernel_dirs[*]:-none}"
+	exit 1
+fi
+kver="$(basename "${kernel_dirs[0]}")"
+{% endraw %}
+log info "Setting up boot for kernel ${kver}"
+
+# Kernel: Debian-style distros put it in /boot, RPM ones only in /usr/lib/modules/<kver>/vmlinuz.
+if [[ ! -f "${BUILDROOT}/boot/vmlinuz-${kver}" ]]; then
+	cp -v "${BUILDROOT}/usr/lib/modules/${kver}/vmlinuz" "${BUILDROOT}/boot/vmlinuz-${kver}"
+fi
+
+# Bootloaders want an uncompressed arm64 Image (it carries the EFI stub's PE header); gzip'd ones won't do.
+kernel_image="vmlinuz-${kver}"
+if [[ "$(head -c2 "${BUILDROOT}/boot/vmlinuz-${kver}" | od -An -tx1 | tr -d ' ')" == "1f8b" ]]; then
+	log info "Kernel is gzip-compressed; decompressing to /boot/Image-${kver}"
+	zcat "${BUILDROOT}/boot/vmlinuz-${kver}" > "${BUILDROOT}/boot/Image-${kver}"
+	kernel_image="Image-${kver}"
+fi
+
+# Initrd, from the distro's own generator, generic (not host-only: we build inside a container).
+log info "Generating initrd with {{ flavor.distro.initramfs_generator }}..."
+{% if flavor.distro.initramfs_generator == "initramfs-tools" %}
+mkosi-chroot update-initramfs -c -k "${kver}"
+{% else %}
+mkosi-chroot dracut --no-hostonly --force "/boot/initrd.img-${kver}" "${kver}"
+{% endif %}
+if [[ ! -f "${BUILDROOT}/boot/initrd.img-${kver}" ]]; then
+	log error "Initrd /boot/initrd.img-${kver} was not generated"
+	exit 1
+fi
+
+cmdline="{{ flavor.output.kernel_cmdline(flavor) }}"
+
+{% if flavor.platform.boot_scheme == "uefi" %}
+# UEFI: systemd-boot as the removable-media bootloader, with one BLS Type #1 entry.
+# repart copies /efi into the ESP (and excludes it from the root partition).
+log info "Installing systemd-boot and boot entry into the ESP..."
+{% if flavor.cfg.arch == "amd64" %}
+efi_arch="x64" efi_upper="X64"
+{% else %}
+efi_arch="aa64" efi_upper="AA64"
+{% endif %}
+mkdir -p "${BUILDROOT}/efi/EFI/BOOT" "${BUILDROOT}/efi/loader/entries" "${BUILDROOT}/efi/captainos"
+cp -v "${BUILDROOT}/usr/lib/systemd/boot/efi/systemd-boot${efi_arch}.efi" "${BUILDROOT}/efi/EFI/BOOT/BOOT${efi_upper}.EFI"
+cp -v "${BUILDROOT}/boot/${kernel_image}" "${BUILDROOT}/efi/captainos/linux"
+cp -v "${BUILDROOT}/boot/initrd.img-${kver}" "${BUILDROOT}/efi/captainos/initrd"
+cat > "${BUILDROOT}/efi/loader/loader.conf" <<-LOADER_CONF
+	default captainos.conf
+	timeout 3
+LOADER_CONF
+cat > "${BUILDROOT}/efi/loader/entries/captainos.conf" <<-ENTRY_CONF
+	title {{ flavor.name }} (${kver})
+	linux /captainos/linux
+	initrd /captainos/initrd
+	options ${cmdline}
+ENTRY_CONF
+{% elif flavor.platform.boot_scheme == "rpi" %}
+# Raspberry Pi: the firmware (merged into /efi via ExtraTrees) boots kernel8.img itself, no U-Boot.
+# repart copies /efi into the vfat boot partition. Generic for Pi 4B and newer; Tinkerbell
+# workflows may adjust config.txt/cmdline.txt when provisioning.
+dtb_dir="$(echo -n "${BUILDROOT}"/{{ flavor.platform.kernel_dtb_glob(flavor) }})"
+if [[ ! -d "${dtb_dir}/broadcom" || ! -d "${dtb_dir}/overlays" ]]; then
+	log error "No broadcom/ and overlays/ DTB directories found in ${dtb_dir}"
+	exit 1
+fi
+log info "Populating the RPi boot partition (DTBs: ${dtb_dir#"${BUILDROOT}"})"
+mkdir -p "${BUILDROOT}/efi/overlays"
+cp -v "${BUILDROOT}/boot/${kernel_image}" "${BUILDROOT}/efi/kernel8.img"
+cp -v "${BUILDROOT}/boot/initrd.img-${kver}" "${BUILDROOT}/efi/initrd.img"
+cp "${dtb_dir}"/broadcom/*.dtb "${BUILDROOT}/efi/"
+cp "${dtb_dir}"/overlays/*.dtbo "${BUILDROOT}/efi/overlays/"
+if [[ -f "${dtb_dir}/overlays/overlay_map.dtb" ]]; then
+	cp "${dtb_dir}/overlays/overlay_map.dtb" "${BUILDROOT}/efi/overlays/"
+fi
+cat > "${BUILDROOT}/efi/config.txt" <<-CONFIG_TXT
+	# Generic, for Raspberry Pi 4B and newer; Tinkerbell workflows may customize it when provisioning.
+	arm_64bit=1
+	kernel=kernel8.img
+	initramfs initrd.img followkernel
+	enable_uart=1
+CONFIG_TXT
+echo "${cmdline}" > "${BUILDROOT}/efi/cmdline.txt"
+{% else %}
+# DeviceTree: extlinux.conf for U-Boot's distro boot, on the root partition.
+dtb_dir="$(echo -n "${BUILDROOT}"/{{ flavor.platform.kernel_dtb_glob(flavor) }})"
+if [[ ! -d "${dtb_dir}" ]]; then
+	log error "No DTB directory found at ${dtb_dir}"
+	exit 1
+fi
+log info "Writing /boot/extlinux/extlinux.conf (DTBs: ${dtb_dir#"${BUILDROOT}"})"
+mkdir -p "${BUILDROOT}/boot/extlinux"
+cat > "${BUILDROOT}/boot/extlinux/extlinux.conf" <<-EXTLINUX_CONF
+	default captainos
+	timeout 30
+	menu title {{ flavor.name }}
+
+	label captainos
+	    kernel /boot/${kernel_image}
+	    initrd /boot/initrd.img-${kver}
+	    fdtdir ${dtb_dir#"${BUILDROOT}"}/
+	    append ${cmdline}
+EXTLINUX_CONF
+{% endif %}
+
+log info "Boot setup complete."

@@ -1,0 +1,3 @@
+# CaptainOS preset: disk images are reached over ssh (keys come from cloud-init)
+enable ssh.service
+enable sshd.service

@@ -1,0 +1,3 @@
+# CaptainOS ships no SELinux policy.
+SELINUX=disabled
+SELINUXTYPE=targeted

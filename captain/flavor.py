@@ -1,66 +1,152 @@
-"""Flavor-specific configuration."""
+"""Flavors: a composition of traits, one per axis, rendered into an mkosi config tree."""
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import logging
 import shutil
-from abc import abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, runtime_checkable
 
 import jinja2
 from rich.table import Table
 
 import captain
-from captain.artifacts import OutputArchArtifact, OutputArchArtifactType
+import captain.custom
+from captain.artifacts import OutputArchArtifact
 from captain.config import Config
+from captain.traits import TRAITS_DIR, Axis, Trait
+from captain.traits.distro import Distro
+from captain.traits.output import Output
+from captain.traits.platform import Platform
+from captain.traits.role import Role
 
 log = logging.getLogger(__name__)
 
+# Static dirs copied from each content dir into its drop-in; "*.j2" files in them are rendered.
+STATIC_DIRS = ("mkosi.extra", "mkosi.sandbox", "mkosi.skeleton", "mkosi.repart")
+# Script templates in each content dir; rendered with the bash header prepended.
+SCRIPTS = {"mkosi.postinst.sh.j2": "mkosi.postinst", "mkosi.finalize.sh.j2": "mkosi.finalize"}
+BASH_HEADER = TRAITS_DIR / "core" / "bash.header.sh"
 
-@runtime_checkable
-class BaseFlavor(Protocol):
-    cfg: Config
+
+@dataclass
+class _GeneratedFile:
+    content: bytes  # for symlinks, the link target
+    mode: int
+    symlink: bool = False
+
+
+@dataclass
+class Flavor:
     id: str
     name: str
     description: str
-    flavor_dir: Path
-    supported_architectures: frozenset[str]
-    template_map: dict[str, list[Path]]
-    static_map: dict[str, Path]
+    distro: Distro
+    platform: Platform
+    role: Role
+    output: Output
+    extra: tuple[Trait, ...] = ()
+    # Suffix for release tags (`<tag><suffix>`); None means "-<id>". Stable for published flavors.
+    release_tag_suffix: str | None = None
+    cfg: Config = field(init=False, repr=False)
 
-    def setup(self, cfg: Config, flavor_dir: Path) -> None:
+    @property
+    def tag_suffix(self) -> str:
+        return self.release_tag_suffix if self.release_tag_suffix is not None else f"-{self.id}"
+
+    @property
+    def traits(self) -> list[Trait]:
+        from captain.traits.core import Core
+
+        return [Core(), self.distro, self.platform, self.role, self.output, *self.extra]
+
+    @property
+    def supported_architectures(self) -> frozenset[str]:
+        arches = frozenset(["amd64", "arm64"])
+        for trait in self.traits:
+            if trait.supported_architectures is not None:
+                arches &= trait.supported_architectures
+        return arches
+
+    def setup(self, cfg: Config) -> None:
         if cfg is None:
             raise ValueError("cfg (Config) cannot be None")
         self.cfg = cfg
+        cfg.output_kind = self.output.output_kind
 
-        if flavor_dir is None:
-            raise ValueError("flavor_dir (Path) cannot be None")
-        if not flavor_dir.is_dir():
-            raise ValueError(f"flavor_dir {flavor_dir} does not exist or is not a directory")
-        self.flavor_dir = flavor_dir
+    # --- questions answered by the traits ---------------------------------
 
-        self.template_map = {}
-        self.static_map = {}
-        log.debug("Called BaseFlavor.setup()...")
-        pass
+    def keep_package_manager(self) -> bool:
+        return any(t.keep_package_manager(self) for t in self.traits)
 
-    def generate(self, hash_only: bool = False):
-        log.debug("Called BaseFlavor.generate()...")
-        # Before generating, cleanup known targets. @TODO make dir disposable instead
-        log.debug("Cleaning up old generated files in %s", self.cfg.project_dir)
-        shutil.rmtree(self.cfg.project_dir / "mkosi.conf", ignore_errors=True)
-        shutil.rmtree(self.cfg.project_dir / "mkosi.postinst", ignore_errors=True)
-        shutil.rmtree(self.cfg.project_dir / "mkosi.finalize", ignore_errors=True)
-        shutil.rmtree(self.cfg.project_dir / "mkosi.extra", ignore_errors=True)
-        shutil.rmtree(self.cfg.project_dir / "mkosi.sandbox", ignore_errors=True)
-        shutil.rmtree(self.cfg.project_dir / "mkosi.skeleton", ignore_errors=True)
+    def keep_hwdb(self) -> bool:
+        return any(t.keep_hwdb(self) for t in self.traits)
 
-        hashes: dict[str, str] = {}
-        self.copy_static_files(self.cfg.project_dir, hash_only, hashes)
-        self.render_templates(self.cfg.project_dir, hash_only, hashes)  # For compatibility
+    def project_relative(self, path: str) -> str:
+        """*path* (relative to the project dir) as seen from a generated drop-in directory.
 
+        mkosi resolves relative paths in a drop-in directory's config against that
+        drop-in (mkosi.generated/mkosi.conf.d/<dropin>/), and this works both natively
+        and in the builder container, where the project dir is mounted elsewhere.
+        """
+        return f"../../../{path}"
+
+    def has_iso(self) -> bool:
+        return self.output.supports_iso and self.platform.iso_capable
+
+    def custom_packages(self, layer: Path) -> set[str]:
+        # look into <layer>/packages.txt, if it exists, read each non-comment line
+        custom_packages_file = layer / "packages.txt"
+        if not custom_packages_file.exists():
+            return set()
+        log.debug("Reading custom packages from %s", custom_packages_file)
+        return {
+            line.strip()
+            for line in custom_packages_file.read_text().splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        }
+
+    # --- hooks --------------------------------------------------------------
+
+    def pre_mkosi_stage(self) -> None:
+        for trait in self.traits:
+            trait.pre_mkosi(self)
+
+    def post_mkosi_stage(self) -> None:
+        for trait in self.traits:
+            trait.post_mkosi(self)
+
+    def post_artifact_collect(self) -> None:
+        for trait in self.traits:
+            trait.post_artifact_collect(self)
+
+    def list_arch_artifacts(self, output_arch: str) -> list[OutputArchArtifact]:
+        artifacts: list[OutputArchArtifact] = []
+        # The output's own artifacts come first, then whatever other traits add.
+        self.output.add_arch_artifacts(self, output_arch, artifacts)
+        for trait in self.traits:
+            if trait is not self.output:
+                trait.add_arch_artifacts(self, output_arch, artifacts)
+        log.info("Artifacts for flavor %s for arch '%s': %s", self.id, output_arch, artifacts)
+        return artifacts
+
+    # --- generation ---------------------------------------------------------
+
+    def generate(self, hash_only: bool = False) -> None:
+        """Render the mkosi tree into cfg.generated_dir and compute cfg.flavor_hash."""
+        files: dict[str, _GeneratedFile] = {
+            "mkosi.conf": _GeneratedFile(
+                f"# Generated by captain for flavor '{self.id}'; see mkosi.conf.d/\n".encode(),
+                0o644,
+            )
+        }
+        for trait in self.traits:
+            self._generate_trait(trait, files)
+        self._generate_custom(files)
+
+        hashes = {path: hashlib.sha256(f.content).hexdigest() for path, f in files.items()}
         self.cfg.flavor_hash = hashlib.sha256(
             "".join(f"{k}={v}" for k, v in (sorted(hashes.items()))).encode()
         ).hexdigest()[:16]
@@ -73,221 +159,163 @@ class BaseFlavor(Protocol):
             table = Table(
                 title="Generated Files and Hashes", show_header=True, header_style="bold magenta"
             )
-            table.add_column("Relative Path", style="dim", width=40)
+            table.add_column("Relative Path", style="dim", width=60)
             table.add_column("SHA256 Hash", style="dim", width=64)
-            for relative_path, hash_value in hashes.items():
+            for relative_path, hash_value in sorted(hashes.items()):
                 table.add_row(relative_path, hash_value)
             captain.console.print(table)
 
-        pass
+        if hash_only:
+            return
 
-    def specific_flavor_dir(self, flavor_id: str) -> Path:
-        flavor_id_underscore = flavor_id.replace("-", "_")
-        flavor_dir = self.cfg.project_dir / "captain" / "flavors" / flavor_id_underscore
+        out = self.cfg.generated_dir
+        log.debug("Writing generated mkosi tree to %s", out)
+        shutil.rmtree(out, ignore_errors=True)
+        for relative_path, generated in files.items():
+            target = out / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if generated.symlink:
+                target.symlink_to(generated.content.decode())
+                continue
+            target.write_bytes(generated.content)
+            target.chmod(generated.mode)
 
-        if not flavor_dir.is_dir():
-            log.error(
-                "Specific Flavor dir '%s' not found. Expected to find directory %s",
-                flavor_id,
-                flavor_dir,
+    def _render(self, template_path: Path, keep_trailing_newline: bool = False) -> str:
+        template = jinja2.Environment(
+            loader=jinja2.FileSystemLoader(template_path.parent),
+            undefined=jinja2.StrictUndefined,
+            keep_trailing_newline=keep_trailing_newline,
+        ).get_template(template_path.name)
+        return template.render(cfg=self.cfg, flavor=self)
+
+    def _script(self, parts: list[Path]) -> _GeneratedFile:
+        rendered = "".join(self._render(p) + "\n" for p in [BASH_HEADER, *parts])
+        return _GeneratedFile(rendered.encode(), 0o755)
+
+    def _add_static_dir(
+        self, files: dict[str, _GeneratedFile], src_dir: Path, dest_prefix: str
+    ) -> None:
+        if not src_dir.is_dir():
+            return
+        for src in sorted(src_dir.rglob("*")):
+            relative = src.relative_to(src_dir)
+            if src.is_symlink():
+                # eg units masked via /dev/null, or default.target -> multi-user.target
+                link = str(src.readlink()).encode()
+                files[f"{dest_prefix}/{relative}"] = _GeneratedFile(link, 0o777, symlink=True)
+                continue
+            if not src.is_file():
+                continue
+            mode = src.stat().st_mode & 0o7777
+            if src.suffix == ".j2":
+                rendered = self._render(src, keep_trailing_newline=True)
+                if not rendered.strip():
+                    continue  # templates can opt out (eg. a repo file for the other distro family)
+                content = rendered.encode()
+                relative = relative.with_suffix("")
+            else:
+                content = src.read_bytes()
+            files[f"{dest_prefix}/{relative}"] = _GeneratedFile(content, mode)
+
+    def _settings(self, trait: Trait) -> str:
+        """mkosi settings computed from a trait's methods (packages etc)."""
+        lines: list[str] = []
+        token = trait.cache_bust_token(self)
+        if token:
+            lines += [f"# cache-bust: {token}"]
+        packages = self.distro.map_packages(trait.packages(self))
+        package_dirs = {self.project_relative(d) for d in trait.package_directories(self)}
+        if packages or package_dirs:
+            lines += ["[Content]"]
+        if packages:
+            lines += ["Packages=", *(f"    {p}" for p in sorted(packages))]
+        if package_dirs:
+            lines += ["PackageDirectories=", *(f"    {d}" for d in sorted(package_dirs))]
+        return "\n".join(lines) + "\n" if lines else ""
+
+    def _generate_trait(self, trait: Trait, files: dict[str, _GeneratedFile]) -> None:
+        dropins: list[str] = []
+        for index, content_dir in enumerate(trait.content_dirs()):
+            slug = str(content_dir.relative_to(TRAITS_DIR)).replace("/", "-")
+            dropin = f"mkosi.conf.d/{trait.axis.value + index:02d}-{slug}"
+            dropins.append(dropin)
+            conf = content_dir / "mkosi.conf.j2"
+            if conf.is_file():
+                files[f"{dropin}/mkosi.conf"] = _GeneratedFile(self._render(conf).encode(), 0o644)
+            for template_name, script_name in SCRIPTS.items():
+                if (content_dir / template_name).is_file():
+                    files[f"{dropin}/{script_name}"] = self._script([content_dir / template_name])
+            for static_dir in STATIC_DIRS:
+                self._add_static_dir(files, content_dir / static_dir, f"{dropin}/{static_dir}")
+
+        settings = self._settings(trait)
+        if not settings:
+            return
+        if not dropins:
+            dropins.append(
+                f"mkosi.conf.d/{trait.axis.value:02d}-{trait.axis.name.lower()}-{trait.name}"
             )
-            raise SystemExit(1)
-        return flavor_dir
+        conf_path = f"{dropins[-1]}/mkosi.conf"
+        existing = files.get(conf_path)
+        content = (existing.content.decode() + "\n" if existing else "") + settings
+        files[conf_path] = _GeneratedFile(content.encode(), 0o644)
 
-    def add_static_dir(self, dir_to_include: str, flavor_dir: Path, prefix_with: str | None = None):
-        extra_dir = flavor_dir / dir_to_include
-        if extra_dir.exists() and extra_dir.is_dir():
-            for extra_file in extra_dir.rglob("*"):
-                if extra_file.is_file():
-                    relative_path = extra_file.relative_to(flavor_dir)
-                    if prefix_with is not None:
-                        relative_path = Path(prefix_with) / extra_file.relative_to(extra_dir)
-                    self.static_map[str(relative_path)] = extra_file
+    def _generate_custom(self, files: dict[str, _GeneratedFile]) -> None:
+        """The user's custom/ dir and matching custom/by-<axis>/<value>/ dirs, as the last
+        drop-in. Use-cases:
+        - add CA root certificate to global trust store (via ca-certificates package)
+        - add some package (eg firmware) via custom/packages.txt
+        - configure containerd to use specific mirrors
+        - run some postinst or finalize script to do some custom configuration
 
-    def render_templates(
-        self, output_dir: Path, hash_only: bool = False, hashes: dict[str, str] | None = None
-    ):
-        log.debug("Called BaseFlavor.render_templates() with output_dir: %s", output_dir)
-        # Use jinja2 to render all templates in self.template_map, writing output to output_dir
-        # The keys of self.template_map are the relative output paths (e.g. "mkosi.conf"), and the
-        # values are lists of Path objects pointing to Jinja2 template files.
-        # If more than one template is provided for a given output path, they should be rendered
-        # in order and concatenated together to produce the final output file.
-        for relative_output_path, template_paths in self.template_map.items():
-            log.debug(
-                "Rendering templates for output path '%s': %s",
-                relative_output_path,
-                template_paths,
-            )
-            rendered_content = ""
-            for template_path in template_paths:
-                log.debug("Rendering template %s", template_path)
-                # Here you would load the template file, render it with the appropriate context
-                # (e.g. using Jinja2), and append the rendered content to rendered_content.
-                # For example:
-                template = jinja2.Environment(
-                    loader=jinja2.FileSystemLoader(template_path.parent),
-                    undefined=jinja2.StrictUndefined,
-                ).get_template(template_path.name)
-                rendered_content += template.render(cfg=self.cfg, flavor=self) + "\n"
-
-            if hashes is not None:
-                hashes[relative_output_path] = hashlib.sha256(rendered_content.encode()).hexdigest()
-            if hash_only:
-                continue  # Skip writing if we're only interested in hashes
-
-            output_file_path = output_dir / relative_output_path
-            log.debug("Writing rendered content to %s", output_file_path)
-            output_file_path.parent.mkdir(parents=True, exist_ok=True)
-            output_file_path.write_text(rendered_content)
-
-            # Make output_file executable @TODO: we will need a way to tell
-            output_file_path.chmod(output_file_path.stat().st_mode | 0o111)
-
-    def copy_static_files(
-        self, project_dir, hash_only: bool = False, hashes: dict[str, str] | None = None
-    ):
-        # Do a plain copy of all files in self.static_map to project_dir / relative_path, where
-        # relative_path is the key in self.static_map
-        for relative_path, source_path in self.static_map.items():
-            if hashes is not None:
-                hashes[relative_path] = hashlib.sha256(source_path.read_bytes()).hexdigest()
-            if hash_only:
-                continue  # Skip copying if we're only interested in hashes
-            destination_path = project_dir / relative_path
-            log.debug("Copying static file from '%s' to '%s'", source_path, destination_path)
-            destination_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_path, destination_path)
-
-    def cache_bust_token(self) -> str:
-        """Token rendered into mkosi.conf so a flavor's hash changes on demand.
-
-        Base flavors return an empty string (stable hash). Flavors whose upstream
-        packages move under a stable name (e.g. armbian meta-packages) override
-        this to fold a repo version token in, forcing a rebuild when it changes.
+        Layers merge by name, general to specific: same-path files and same-named
+        scripts from a later layer replace earlier ones; scripts run sorted by name.
         """
-        return ""
-
-    @abstractmethod
-    def has_iso(self) -> bool:
-        return False
-
-    def pre_mkosi_stage(self):
-        pass
-
-    def post_mkosi_stage(self):
-        pass
-
-    def post_artifact_collect(self):
-        pass
-
-    def list_arch_artifacts(self, output_arch: str) -> list[OutputArchArtifact]:
-        artifacts: list[OutputArchArtifact] = [
-            OutputArchArtifact(
-                type=OutputArchArtifactType.FILE, name=f"vmlinuz-{self.cfg.flavor_id}-{output_arch}"
-            ),
-            OutputArchArtifact(
-                type=OutputArchArtifactType.FILE,
-                name=f"initramfs-{self.cfg.flavor_id}-{output_arch}",
-            ),
-        ]
-        # include .iso if the flavor supports it.
-        if self.has_iso():
-            artifacts += [
-                OutputArchArtifact(
-                    type=OutputArchArtifactType.FILE,
-                    name=f"captainos-{self.cfg.flavor_id}-{output_arch}.iso",
-                )
-            ]
-
-        self.add_arch_dtb_artifacts(artifacts, output_arch)
-
-        log.info(
-            "Artifacts for flavor %s for arch '%s': %s", self.cfg.flavor_id, output_arch, artifacts
+        layers = captain.custom.layers(self)
+        dropin = f"mkosi.conf.d/{Axis.CUSTOM.value:02d}-custom"
+        for layer in layers:
+            self._add_static_dir(files, layer / "files", f"{dropin}/mkosi.extra")
+        for in_dir, script_name in (
+            ("mkosi-postinst", "mkosi.postinst"),
+            ("mkosi-finalize", "mkosi.finalize"),
+        ):
+            by_name = {
+                f.name: f
+                for layer in layers
+                if (layer / in_dir).is_dir()
+                for f in sorted((layer / in_dir).iterdir())
+                if f.is_file()
+            }
+            scripts = [by_name[name] for name in sorted(by_name)]
+            log.debug("Adding custom %s scripts: %s", script_name, scripts)
+            if scripts:
+                files[f"{dropin}/{script_name}"] = self._script(scripts)
+        packages = self.distro.map_packages(
+            set().union(*(self.custom_packages(layer) for layer in layers))
         )
-        return artifacts
-
-    def add_arch_dtb_artifacts(self, artifacts: list[OutputArchArtifact], output_arch: str):
-        # if arm64, include DTBs.
-        if output_arch == "aarch64":
-            artifacts.append(
-                OutputArchArtifact(
-                    type=OutputArchArtifactType.DIRECTORY,
-                    name=f"dtb-{self.cfg.flavor_id}-{output_arch}",
-                )
-            )
+        if packages:
+            settings = "[Content]\nPackages=\n" + "".join(f"    {p}\n" for p in sorted(packages))
+            files[f"{dropin}/mkosi.conf"] = _GeneratedFile(settings.encode(), 0o644)
 
 
 def list_available_flavors() -> list[str]:
-    import importlib
-    import pkgutil
+    from captain.flavors import FLAVORS
 
-    package = importlib.import_module("captain.flavors")
-    # iter_modules finds immediate children; walk_packages recurses
-    ret = []
-    for _finder, module_name, _is_pkg in pkgutil.walk_packages(
-        package.__path__, prefix=f"{package.__name__}."
-    ):
-        try:
-            module = importlib.import_module(module_name)
-        except Exception as exc:
-            log.debug(f"Skipping {module_name}: {exc}")
-            continue
-
-        fn = getattr(module, "create_flavor", None)
-        if fn is not None and callable(fn):
-            flavor_id = module_name.rsplit(".", 1)[-1].replace("_", "-")
-            ret.append(flavor_id)
-            log.debug("Discovered flavor '%s' via module %s", flavor_id, module_name)
-
-    return sorted(ret)
+    return sorted(f.id for f in FLAVORS)
 
 
-def create_and_setup_flavor_for_id(flavor_id: str, cfg: Config) -> BaseFlavor:
+def create_and_setup_flavor_for_id(flavor_id: str, cfg: Config) -> Flavor:
+    from captain.flavors import FLAVORS
+
     log.debug("Creating and setting up flavor for id '%s'", flavor_id)
-    flavor_id_underscore = flavor_id.replace("-", "_")
-    flavor_dir = cfg.project_dir / "captain" / "flavors" / flavor_id_underscore
-
-    if not flavor_dir.is_dir():
-        log.error(
-            "Flavor '%s' not found. Expected to find directory %s",
-            flavor_id,
-            flavor_dir,
-        )
+    found = [f for f in FLAVORS if f.id == flavor_id]
+    if not found:
+        log.error("Flavor '%s' not found. Available: %s", flavor_id, list_available_flavors())
         raise SystemExit(1)
 
-    wanted_module = f"captain.flavors.{flavor_id_underscore}"
-    log.debug("Attempting to import flavor module %s from directory %s", wanted_module, flavor_dir)
-
-    try:
-        module = __import__(wanted_module, fromlist=["create_flavor"])
-    except ImportError as e:
-        log.error(
-            "Failed to import flavor module %s from directory %s: %s",
-            wanted_module,
-            flavor_dir,
-            e,
-        )
-        raise e
-
-    # Validate API explicitly
-    if not hasattr(module, "create_flavor"):
-        log.error("Flavor module %s does not define create_flavor()", wanted_module)
-        raise SystemExit(1)
-
-    log.debug("Executing %s.create_flavor()", wanted_module)
-    flavor: BaseFlavor = module.create_flavor()
-
-    if not isinstance(flavor, BaseFlavor):
-        log.error(
-            "create_flavor() in %s did not return BaseFlavor (got %r)",
-            wanted_module,
-            type(flavor),
-        )
-        raise SystemExit(1)
-
-    log.debug("Calling setup() on flavor %s with config: %s", flavor, cfg)
-    flavor.setup(cfg, flavor_dir)
+    # Copy, so the registry's instance is never bound to a Config.
+    flavor = dataclasses.replace(found[0])
+    flavor.setup(cfg)
 
     # Ensure the current arch is supported by the flavor
     if cfg.arch_info.arch not in flavor.supported_architectures:
@@ -298,17 +326,10 @@ def create_and_setup_flavor_for_id(flavor_id: str, cfg: Config) -> BaseFlavor:
             flavor.supported_architectures,
         )
         raise SystemExit(1)
-    else:
-        log.debug(
-            "Flavor '%s' supports architecture '%s'",
-            flavor.id,
-            cfg.arch_info.arch,
-        )
 
     log.debug(
         "Flavor is setup; description: %s; supported_architectures: %s",
         flavor.description,
         flavor.supported_architectures,
     )
-
     return flavor

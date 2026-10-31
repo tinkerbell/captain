@@ -1,8 +1,28 @@
 name: Release
 on:
+  # Upstream: real releases, from manually pushed tags.
   push:
     tags:
       - "v**"
+  # Forks: automatic versions from ci.yml (v0.0.0-ci.<run_number>): OCI tags only, unless
+  # github-release is set (repo variable CAPTAIN_FORK_GH_RELEASE=true).
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version / tag to create, eg. v0.0.0-ci.123"
+        required: true
+        type: string
+      sha:
+        description: "Commit whose CI-published images to release"
+        required: true
+        type: string
+      prerelease:
+        type: boolean
+        default: false
+      github-release:
+        description: "Also create a GitHub Release with every flavor's artifacts (slow); else OCI tags only"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -11,14 +31,31 @@ permissions:
 env:
   FORCE_COLOR: "1"
   CAPTAIN_VERBOSE: "1"
+  VERSION: ${{ inputs.version || github.ref_name }}
+  # Selects the images CI published for this commit (v0.0.0-<sha7>-<flavor>[-<arch>]).
+  GIT_SHA: ${{ inputs.sha || github.sha }}
+  # Tag pushes (no inputs) always get a GitHub Release.
+  GITHUB_RELEASE: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') || inputs.github-release }}
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      # Flavors are pulled one at a time, but some (disk images) are big: make room first.
+      # Only on GitHub-hosted runners; never touch a self-hosted runner's toolchains.
+      - name: Free disk space (GitHub-hosted runners only)
+        if: runner.environment == 'github-hosted' && env.GITHUB_RELEASE == 'true'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium
+          sudo docker image prune --all --force > /dev/null
+          df -h /
+
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
+          ref: ${{ env.GIT_SHA }}
           fetch-depth: 0
 
       - name: Log in to GHCR
@@ -32,57 +69,42 @@ jobs:
         run: cat .github/config.env >> "$GITHUB_ENV"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-
-      - name: Pull release artifacts
-        run: |
-          uv run captain --flavor-id trixie-full release --target combined pull --pull-output release-artifacts
-          uv run captain --flavor-id trixie-slim release --target combined pull --pull-output release-artifacts
-          uv run captain --flavor-id trixie-armbian-rpi release --target arm64 pull --pull-output release-artifacts
-          uv run captain --flavor-id trixie-rockchip64 release --target arm64 pull --pull-output release-artifacts
-          uv run captain --flavor-id trixie-meson64 release --target arm64 pull --pull-output release-artifacts
-          uv run captain --flavor-id trixie-rockchip64-vendor release --target arm64 pull --pull-output release-artifacts
-          uv run captain --flavor-id trixie-genio release --target arm64 pull --pull-output release-artifacts
-
-      - name: "directories -> tarball"
-        working-directory: out/release-artifacts
-        run: |
-          for dir in */; do
-              # if not a directory, skip
-              [[ ! -d "$dir" || "$dir" == "." || "$dir" == ".." ]] && continue
-              tarball="${dir%/}.tar.gz"
-              echo "Creating tarball for '$dir' -> '$tarball'"
-              tar -czf "${dir%/}.tar.gz" "$dir"
-              echo "Removing directory '$dir'"
-              rm -rf "$dir"
-          done
+        uses: ./.github/actions/setup-uv
 
       - name: Create GitHub Release
+        if: env.GITHUB_RELEASE == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.ref_name }}" \
-            out/release-artifacts/* \
-            --generate-notes \
-            --title "${{ github.ref_name }}"
+          gh release create "${VERSION}" --target "${GIT_SHA}" --title "${VERSION}" --generate-notes \
+            ${{ inputs.prerelease && '--prerelease' || '' }}
 
-      - name: Tag (trixie-full)
-        run: uv run captain --flavor-id trixie-full release tag --new-tag "${{ github.ref_name }}"
+      # One flavor at a time, so the runner's disk only ever holds a single flavor's artifacts.
+      - name: Pull, pack and upload release artifacts
+        if: env.GITHUB_RELEASE == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dir=out/release-artifacts
+          # one line per flavor in the registry (captain/flavors.py): <id> <target> <arch> <tag-suffix>
+          uv run captain list-flavors --release | while read -r flavor target arch _suffix; do
+            rm -rf "${dir}"
+            uv run captain --flavor-id "${flavor}" --arch "${arch}" release --target "${target}" pull --pull-output release-artifacts < /dev/null
+            for d in "${dir}"/*/; do
+              [[ -d "${d}" ]] || continue
+              echo "Creating tarball for '${d}'"
+              tar -C "${dir}" -czf "${d%/}.tar.gz" "$(basename "${d}")"
+              rm -rf "${d}"
+            done
+            gh release upload "${VERSION}" "${dir}"/* --clobber < /dev/null
+            rm -rf "${dir}"
+            df -h / | tail -1
+          done
 
-      - name: Tag (trixie-slim)
-        run: uv run captain --flavor-id trixie-slim release tag --new-tag "${{ github.ref_name }}-slim"
-
-      - name: Tag (trixie-armbian-rpi)
-        run: uv run captain --flavor-id trixie-armbian-rpi --arch arm64 release tag --new-tag "${{ github.ref_name }}-rpi"
-
-      - name: Tag (trixie-rockchip64)
-        run: uv run captain --flavor-id trixie-rockchip64 --arch arm64 release tag --new-tag "${{ github.ref_name }}-rockchip64"
-
-      - name: Tag (trixie-meson64)
-        run: uv run captain --flavor-id trixie-meson64 --arch arm64 release tag --new-tag "${{ github.ref_name }}-meson64"
-
-      - name: Tag (trixie-rockchip64-vendor)
-        run: uv run captain --flavor-id trixie-rockchip64-vendor --arch arm64 release tag --new-tag "${{ github.ref_name }}-rockchip64-vendor"
-
-      - name: Tag (trixie-genio)
-        run: uv run captain --flavor-id trixie-genio --arch arm64 release tag --new-tag "${{ github.ref_name }}-genio"
+      # Manifest re-tags in the registry (no Docker): seconds.
+      - name: Tag all flavors
+        run: |
+          # tag suffixes are kept stable for already-published flavors (eg "" for trixie-full, "-slim", "-rpi")
+          uv run captain list-flavors --release | while read -r flavor _target arch suffix; do
+            uv run captain --flavor-id "${flavor}" --arch "${arch}" release tag --new-tag "${VERSION}${suffix}" < /dev/null
+          done

@@ -13,25 +13,31 @@ permissions:
 env:
   FORCE_COLOR: "1"
   CAPTAIN_VERBOSE: "1"
+  # Build cache (OCI artifacts in ghcr.io); read via the docker/login-action credentials.
+  # Scope (downstream/upstream, push or not) is detected from the GitHub context.
 
 jobs:
   # -------------------------------------------------------------------
   # Lint — ruff (lint + format) and pyright (type checking).
   # Doubles as the "prepare" job: resolves dynamic version tokens once
   # (latest kernel.org release of the branch; armbian-next Release ETag)
-  # and exposes them as outputs consumed by the build jobs.
+  # and exposes them as outputs consumed by the build jobs; also decides
+  # whether this run may push to the build cache (docs/build-caching.md).
   # -------------------------------------------------------------------
   prepare:
     runs-on: ubuntu-latest
     outputs:
       kernel_version: ${{ steps.versions.outputs.kernel_version }}
+      cache_push: ${{ steps.cache.outputs.cache_push }}
       armbian_version: ${{ steps.versions.outputs.armbian_version }}
+      matrix: ${{ steps.flavors.outputs.matrix }}
+      matrix_combined: ${{ steps.flavors.outputs.matrix_combined }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: ./.github/actions/setup-uv
 
       - name: Install lint tools
         run: make lint-install
@@ -43,61 +49,19 @@ jobs:
         id: versions
         run: uv run captain prepare-versions >> "$GITHUB_OUTPUT"
 
-  # -------------------------------------------------------------------
-  # Download tools (containerd, runc, nerdctl, CNI plugins)
-  # -------------------------------------------------------------------
-  download-tools:
-    needs: [ prepare ]
-    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [ amd64, arm64 ]
-    env:
-      ARCH: ${{ matrix.arch }}
-      MKOSI_MODE: skip
-      TOOLS_MODE: native
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
+      - name: Detect build cache scope
+        id: cache
+        run: uv run captain cache info --github-output >> "$GITHUB_OUTPUT"
 
-      - name: Restore tools cache
-        id: tools-cache
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            mkosi.input/tools/${{ matrix.arch }}/usr/local/bin
-            mkosi.input/tools/${{ matrix.arch }}/opt/cni
-          key: tools-${{ matrix.arch }}-${{ hashFiles('captain/tools.py') }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-
-      - name: Download tools
-        env:
-          TOOLS_MODE: native
-        run: uv run captain tools
-
-      - name: Save tools cache
-        if: github.ref == 'refs/heads/main' && steps.tools-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            mkosi.input/tools/${{ matrix.arch }}/usr/local/bin
-            mkosi.input/tools/${{ matrix.arch }}/opt/cni
-          key: tools-${{ matrix.arch }}-${{ hashFiles('captain/tools.py') }}
-
-      - name: Upload tools artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          name: tools-${{ matrix.arch }}
-          path: |
-            mkosi.input/tools/${{ matrix.arch }}/usr/local/bin
-            mkosi.input/tools/${{ matrix.arch }}/opt/cni
-          retention-days: 1
+      - name: Build matrices from the flavor registry (captain/flavors.py)
+        id: flavors
+        run: |
+          uv run captain list-flavors
+          uv run captain list-flavors --github-output >> "$GITHUB_OUTPUT"
 
   # -------------------------------------------------------------------
-  # Build Docker builder image, per-arch; pushes to ghcr.io.
+  # Build Docker builder image, per-arch; pushes to ghcr.io. A no-op when
+  # this repo's or upstream's registry already has it (checked, not pulled).
   # -------------------------------------------------------------------
   build-dockerfile:
     needs: [ prepare ]
@@ -109,10 +73,10 @@ jobs:
       ARCH: ${{ matrix.arch }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: ./.github/actions/setup-uv
 
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -122,20 +86,24 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Dockerfile
-        run: uv run captain builder
+        run: uv run captain builder --ensure-remote
         # only if a PR, since we don't want to push images for PRs from forks
         if: github.event_name == 'pull_request'
 
       - name: Build Dockerfile and push
-        run: uv run captain builder --push
+        run: uv run captain builder --push --ensure-remote
         # only if not a PR, since we don't want to push images for PRs from forks (no perms to push)
         if: github.event_name != 'pull_request'
 
   # -------------------------------------------------------------------
-  # Download tools (containerd, runc, nerdctl, CNI plugins)
+  # Cache warmer: tools (containerd, runc, nerdctl, CNI plugins), used by
+  # every flavor. Restores from, or downloads and pushes to, the build cache,
+  # so the build jobs below find them there. Only useful when this run may
+  # push; otherwise the build jobs just download what they miss.
   # -------------------------------------------------------------------
-  build-captainos-kernel:
-    needs: [ prepare, build-dockerfile ]
+  download-tools:
+    needs: [ prepare ]
+    if: needs.prepare.outputs.cache_push == 'true'
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
@@ -143,187 +111,78 @@ jobs:
         arch: [ amd64, arm64 ]
     env:
       ARCH: ${{ matrix.arch }}
-      KERNEL_VERSION: ${{ needs.prepare.outputs.kernel_version }}
+      TOOLS_MODE: native
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Restore kernel cache
-        id: kernel-cache
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            mkosi.input/kernel/${{ matrix.arch }}
-          key: kernel-${{ matrix.arch }}-${{ needs.prepare.outputs.kernel_version }}-${{ hashFiles('**/*.py', 'kernel.configs/*', 'Dockerfile', 'pyproject.toml') }}
-          # any "previous" cache can also be useful; we'll just churn cache misses more often, but that's better than a complete cache miss and rebuild every time
-          restore-keys: |
-            kernel-${{ matrix.arch }}
+        uses: actions/checkout@v7
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
-
-      - name: Build kernel
-        run: uv run captain --verbose kernel
-
-      - name: Save kernel cache
-        if: github.ref == 'refs/heads/main' && steps.kernel-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            mkosi.input/kernel/${{ matrix.arch }}
-          key: kernel-${{ matrix.arch }}-${{ needs.prepare.outputs.kernel_version }}-${{ hashFiles('**/*.py', 'kernel.configs/*', 'Dockerfile', 'pyproject.toml') }}
-
-      - name: Upload kernel artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          name: kernel-${{ matrix.arch }}
-          path: |
-            mkosi.input/kernel/${{ matrix.arch }}
-          retention-days: 1
-
-
-  build-captainos-with-kernel: # only for flavors that require the custom CaptainOS kernel; otherwise, just build-captainos
-    name: "build-captainos (with kernel) ${{ matrix.FLAVOR_ID }} (${{ matrix.arch }})"
-    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
-    needs: [ prepare, download-tools, build-dockerfile, build-captainos-kernel ]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { arch: amd64, output_arch: x86_64, captainos_kernel: true, iso: true, FLAVOR_ID: "trixie-slim" }
-          - { arch: arm64, output_arch: aarch64, captainos_kernel: true, iso: true, FLAVOR_ID: "trixie-slim" }
-    env: &build_env
-      ARCH: ${{ matrix.arch }}
-      MKOSI_MODE: docker
-      ISO_MODE: docker
-      FLAVOR_ID: ${{ matrix.FLAVOR_ID }}
-      # Keep the initramfs/iso caches to only the freshly-built flavor hash; a
-      # restore-key (prefix) cache hit otherwise leaves the previous hash behind.
-      CAPTAIN_DROP_OLD_CACHES: "1"
-      # Latest-of-branch kernel (trixie-slim) and armbian-next repo token
-      # (armbian flavors), resolved once by the prepare job.
-      KERNEL_VERSION: ${{ needs.prepare.outputs.kernel_version }}
-      ARMBIAN_VERSION: ${{ needs.prepare.outputs.armbian_version }}
-    steps: &build_steps
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Download tools artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: tools-${{ matrix.arch }}
-          path: mkosi.input/tools/${{ matrix.arch }}
-
-      - name: Download kernel artifacts == ${{ matrix.captainos_kernel }}
-        uses: actions/download-artifact@v8
-        if: ${{ matrix.captainos_kernel }} # only if matrix entry had captainos_kernel: true
-        with:
-          name: kernel-${{ matrix.arch }}
-          path: mkosi.input/kernel/${{ matrix.arch }}
-
-      - name: Restore tool binary permissions
-        run: |
-          # GitHub Actions artifact upload/download strips execute permissions.
-          # Restore +x on all tool binaries so they work inside the initramfs.
-          chmod +x mkosi.input/tools/${{ matrix.arch }}/usr/local/bin/*
-          chmod +x mkosi.input/tools/${{ matrix.arch }}/opt/cni/bin/*
-
-      - name: Restore initramfs cache
-        id: initramfs-cache
-        uses: actions/cache/restore@v5
-        with:
-          path: mkosi.output/initramfs
-          key: initramfs-${{ matrix.arch }}-${{matrix.FLAVOR_ID}}--k${{ needs.prepare.outputs.kernel_version }}-a${{ needs.prepare.outputs.armbian_version }}--${{ hashFiles('**/*.py', 'kernel.configs/*', 'Dockerfile', 'pyproject.toml') }}
-          # any "previous" cache can also be useful; we'll just churn cache misses more often, but that's better than a complete cache miss and rebuild every time
-          restore-keys: initramfs-${{ matrix.arch }}-${{matrix.FLAVOR_ID}}--
-
-      - name: Show initramfs cache restore SHA256's
-        run: |
-          echo "initramfs cache hit: ${{ steps.initramfs-cache.outputs.cache-hit }}"
-          sha256sum $(find mkosi.output/initramfs -type f || true) || true
-
-      - name: Restore iso cache
-        id: iso-cache
-        if: ${{ matrix.iso }} # only if matrix entry had iso: true
-        uses: actions/cache/restore@v5
-        with:
-          path: mkosi.output/iso
-          key: iso-${{ matrix.arch }}-${{matrix.FLAVOR_ID}}--k${{ needs.prepare.outputs.kernel_version }}-a${{ needs.prepare.outputs.armbian_version }}--${{ hashFiles('**/*.py', 'kernel.configs/*', 'Dockerfile', 'pyproject.toml') }}
-          # any "previous" cache can also be useful; we'll just churn cache misses more often, but that's better than a complete cache miss and rebuild every time
-          restore-keys: iso-${{ matrix.arch }}-${{matrix.FLAVOR_ID}}--
-
-      - name: Show iso cache restore SHA256's
-        if: ${{ matrix.iso }} # only if matrix entry had iso: true
-        run: |
-          echo "iso cache hit: ${{ steps.iso-cache.outputs.cache-hit }}"
-          sha256sum $(find mkosi.output/iso -type f || true) || true
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-
-      - name: Build initramfs
-        run: uv run captain build # full build, incl initramfs and iso when appropriate
-
-      - name: Show initramfs cache save SHA256's
-        run: |
-          echo "initramfs cache hit: ${{ steps.initramfs-cache.outputs.cache-hit }}"
-          sha256sum $(find mkosi.output/initramfs -type f || true) || true
-
-      - name: Save initramfs cache
-        if: github.ref == 'refs/heads/main' && steps.initramfs-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: mkosi.output/initramfs
-          key: initramfs-${{ matrix.arch }}-${{matrix.FLAVOR_ID}}--k${{ needs.prepare.outputs.kernel_version }}-a${{ needs.prepare.outputs.armbian_version }}--${{ hashFiles('**/*.py', 'kernel.configs/*', 'Dockerfile', 'pyproject.toml') }}
-
-      - name: Show iso cache save SHA256's
-        if: ${{ matrix.iso }} # only if matrix entry had iso: true
-        run: |
-          echo "iso cache hit: ${{ steps.iso-cache.outputs.cache-hit }}"
-          sha256sum $(find mkosi.output/iso -type f || true) || true
-
-      - name: Save iso cache
-        if: matrix.iso && github.ref == 'refs/heads/main' && steps.iso-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: mkosi.output/iso
-          key: iso-${{ matrix.arch }}-${{matrix.FLAVOR_ID}}--k${{ needs.prepare.outputs.kernel_version }}-a${{ needs.prepare.outputs.armbian_version }}--${{ hashFiles('**/*.py', 'kernel.configs/*', 'Dockerfile', 'pyproject.toml') }}
-
-      - name: Upload initramfs artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          name: initramfs-${{ matrix.FLAVOR_ID }}-${{ matrix.arch }}
-          # The full 'out/' directory contents, but not any .iso files (if any) since those are uploaded later
-          path: |
-            out/
-            !out/**/*.iso
-          retention-days: 1
-          # do not upload any .iso files (exclude)
-
-      # -------------------------------------------------------------------
-      # UEFI-bootable ISO - only for certain flavors (eg trixie-full)
-      # -------------------------------------------------------------------
-
-      - name: Upload ISO artifact
-        if: ${{ matrix.iso }} # only if matrix entry had iso: true
-        uses: actions/upload-artifact@v6
-        with:
-          name: iso-${{ matrix.FLAVOR_ID }}-${{ matrix.arch }}
-          path: out/captainos-${{ matrix.FLAVOR_ID }}-${{ matrix.output_arch }}.iso
-          retention-days: 1
-
-      # -------------------------------------------------------------------
-      # Publish per-arch artifacts and compute checksums
-      # -------------------------------------------------------------------
+        uses: ./.github/actions/setup-uv
 
       - name: Log in to GHCR
-        if: github.ref == 'refs/heads/main'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download tools (or restore them from the cache)
+        run: uv run captain tools
+
+  # -------------------------------------------------------------------
+  # Build every flavor; mkosi outputs and ISOs come from the build cache
+  # when their inputs are unchanged (then tools and kernel aren't needed).
+  # The CaptainOS kernel (trixie-slim only) is restored or built (and
+  # pushed) by the flavor's own job, so no other flavor waits for it.
+  # -------------------------------------------------------------------
+  build-captainos:
+    name: "build-captainos ${{ matrix.FLAVOR_ID }} (${{ matrix.arch }})"
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    needs: [ prepare, download-tools, build-dockerfile ]
+    # The tools warmer is skipped when this run can't push; build anyway.
+    if: ${{ !cancelled() && !failure() }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    env:
+      ARCH: ${{ matrix.arch }}
+      MKOSI_MODE: docker
+      ISO_MODE: docker
+      FLAVOR_ID: ${{ matrix.FLAVOR_ID }}
+      # Latest-of-branch kernel (trixie-slim) and armbian-next repo token
+      # (armbian flavors), resolved once by the prepare job.
+      KERNEL_VERSION: ${{ needs.prepare.outputs.kernel_version }}
+      ARMBIAN_VERSION: ${{ needs.prepare.outputs.armbian_version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: ./.github/actions/setup-uv
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # On main, a release image of these exact outputs may already exist (content tag): then
+      # there's nothing to build or restore, and publishing just adds this commit's tag.
+      - name: Check whether already published
+        id: release
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          TARGET: ${{ matrix.arch }}
+        run: uv run captain release status --github-output >> "$GITHUB_OUTPUT"
+
+      - name: Build (or restore from the cache)
+        if: steps.release.outputs.published != 'true'
+        run: uv run captain build # full build, incl initramfs and iso when appropriate
+
+      # -------------------------------------------------------------------
+      # Publish per-arch artifacts and compute checksums
+      # -------------------------------------------------------------------
       - name: Publish artifacts to GHCR
         # only pushes to main, and not PR workflows, should try to push to OCI registry
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
@@ -331,75 +190,35 @@ jobs:
           TARGET: ${{ matrix.arch }}
         run: uv run captain release publish
 
-  build-captainos: # those use regular Debian apt repos for kernels
-    name: "build-captainos ${{ matrix.FLAVOR_ID }} (${{ matrix.arch }})"
-    steps: *build_steps
-    env: *build_env
-    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
-    needs: [ prepare, download-tools, build-dockerfile ]
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { arch: amd64, output_arch: x86_64, captainos_kernel: false, iso: true, FLAVOR_ID: "trixie-full" }
-          - { arch: arm64, output_arch: aarch64, captainos_kernel: false, iso: true, FLAVOR_ID: "trixie-full" }
-          - { arch: arm64, output_arch: aarch64, captainos_kernel: false, iso: false, FLAVOR_ID: "trixie-rockchip64" }
-          - { arch: arm64, output_arch: aarch64, captainos_kernel: false, iso: false, FLAVOR_ID: "trixie-rockchip64-vendor" }
-          - { arch: arm64, output_arch: aarch64, captainos_kernel: false, iso: false, FLAVOR_ID: "trixie-genio" }
-          - { arch: arm64, output_arch: aarch64, captainos_kernel: false, iso: false, FLAVOR_ID: "trixie-meson64" }
-          - { arch: arm64, output_arch: aarch64, captainos_kernel: false, iso: false, FLAVOR_ID: "trixie-armbian-rpi" }
-
   # -------------------------------------------------------------------
-  # Publish combined multi-arch image (reuses per-arch registry blobs)
+  # Publish combined multi-arch image (reuses per-arch registry blobs).
+  # Both arches' outputs come from the build cache, which the build jobs
+  # just filled; --cache-only makes sure nothing is rebuilt here. Skipped
+  # when the combined image of these outputs is already published.
   # -------------------------------------------------------------------
   publish-combined:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { combined_flavor: "trixie-full" }
-          - { combined_flavor: "trixie-slim" }
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix_combined) }}
     name: "publish-combined ${{ matrix.combined_flavor }}"
     runs-on: ubuntu-latest
-    needs: [ build-captainos, build-captainos-with-kernel ] # depend on all flavors being built
+    needs: [ prepare, build-captainos ] # prepare: for the matrix; all flavors built
     env:
       FLAVOR_ID: ${{ matrix.combined_flavor }}
-      ARCH: amd64
+      KERNEL_VERSION: ${{ needs.prepare.outputs.kernel_version }}
+      ARMBIAN_VERSION: ${{ needs.prepare.outputs.armbian_version }}
+      CAPTAIN_CACHE_ONLY: "1"
       TARGET: combined
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Load shared config
         run: cat .github/config.env >> "$GITHUB_ENV"
 
-      - name: Download initramfs artifacts (amd64)
-        uses: actions/download-artifact@v8
-        with:
-          name: initramfs-${{ matrix.combined_flavor }}-amd64
-          path: out
-
-      - name: Download ISO artifact (amd64)
-        uses: actions/download-artifact@v8
-        with:
-          name: iso-${{ matrix.combined_flavor }}-amd64
-          path: out
-
-      - name: Download initramfs artifacts (arm64)
-        uses: actions/download-artifact@v8
-        with:
-          name: initramfs-${{ matrix.combined_flavor }}-arm64
-          path: out
-
-      - name: Download ISO artifact (arm64)
-        uses: actions/download-artifact@v8
-        with:
-          name: iso-${{ matrix.combined_flavor }}-arm64
-          path: out
-
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: ./.github/actions/setup-uv
 
       - name: Log in to GHCR
         uses: docker/login-action@v4
@@ -408,7 +227,43 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Check whether already published
+        id: release
+        env:
+          ARCH: amd64
+        run: uv run captain release status --github-output >> "$GITHUB_OUTPUT"
+
+      - name: Restore amd64 outputs from the cache
+        if: steps.release.outputs.published != 'true'
+        run: uv run captain --arch amd64 build
+
+      - name: Restore arm64 outputs from the cache
+        if: steps.release.outputs.published != 'true'
+        run: uv run captain --arch arm64 build
+
       - name: Publish combined image to GHCR
-        # only pushes to main, and not PR workflows, should try to push to OCI registry
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          ARCH: amd64
         run: uv run captain release publish
+
+  # -------------------------------------------------------------------
+  # Forks only: every push to main gets a version, v0.0.0-ci.<run number>,
+  # so consumers have a stable, monotonically increasing one to bump to.
+  # By default just OCI tags (consumers use the images, eg. as k8s image
+  # volumes); set the repo variable CAPTAIN_FORK_GH_RELEASE=true to also
+  # get a GitHub prerelease with every flavor's artifacts (much slower).
+  # Upstream keeps releasing from manually pushed v* tags (release.yml).
+  # -------------------------------------------------------------------
+  release:
+    name: "release v0.0.0-ci.${{ github.run_number }}"
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && github.repository != 'tinkerbell/captain'
+    needs: [ build-captainos, publish-combined ]
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/release.yml
+    with:
+      version: v0.0.0-ci.${{ github.run_number }}
+      sha: ${{ github.sha }}
+      prerelease: true
+      github-release: ${{ vars.CAPTAIN_FORK_GH_RELEASE == 'true' }}

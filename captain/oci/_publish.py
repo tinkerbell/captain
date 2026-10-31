@@ -11,7 +11,7 @@ from uuid import uuid4
 from captain import buildah, skopeo
 from captain.artifacts import OutputArchArtifactType
 from captain.config import Config
-from captain.flavor import BaseFlavor
+from captain.flavor import Flavor
 from captain.util import ensure_dir, get_arch_info
 
 from ._build import (
@@ -56,7 +56,7 @@ def _create_push_cleanup(
 
 def _publish_single_arch(
     *,
-    flavor: BaseFlavor,
+    flavor: Flavor,
     layer_tars: list[Path],
     ref: str,
     repository: str,
@@ -96,12 +96,13 @@ def _publish_single_arch(
 
 def _publish_combined(
     *,
-    flavor: BaseFlavor,
+    flavor: Flavor,
     arch_layer_tars: dict[str, list[Path]],
     registry: str,
     repository: str,
     artifact_name: str,
     tag: str,
+    arch_tags: dict[str, str],
     created: str,
     force: bool = False,
 ) -> bool:
@@ -127,8 +128,7 @@ def _publish_combined(
 
     # Ensure per-arch images exist in the registry.
     for arch in _ARCHES:
-        per_arch_tag = f"{tag}-{arch}"
-        per_arch_ref = _image_ref(registry, repository, artifact_name, per_arch_tag)
+        per_arch_ref = _image_ref(registry, repository, artifact_name, arch_tags[arch])
         if skopeo.image_exists(per_arch_ref):
             log.info("Found %s in registry — will reuse layers for combined image", per_arch_ref)
         else:
@@ -149,7 +149,7 @@ def _publish_combined(
     image_ids: list[str] = []
     for arch in _ARCHES:
         other = next(a for a in _ARCHES if a != arch)
-        per_arch_ref = _image_ref(registry, repository, artifact_name, f"{tag}-{arch}")
+        per_arch_ref = _image_ref(registry, repository, artifact_name, arch_tags[arch])
         image_id = _build_platform_image(
             arch_layer_tars[other],
             f"linux/{arch}",
@@ -180,13 +180,14 @@ def _publish_combined(
 
 def publish(
     cfg: Config,
-    flavor: BaseFlavor,
+    flavor: Flavor,
     *,
     target: str,
     registry: str,
     repository: str,
     artifact_name: str,
     tag: str,
+    arch_tags: dict[str, str] | None = None,
     force: bool = False,
 ) -> None:
     """Collect artifacts and publish a multi-arch OCI index.
@@ -196,16 +197,17 @@ def publish(
     so OCI registries deduplicate blobs automatically.
 
     *target* selects which artifacts to include: ``"amd64"``,
-    ``"arm64"``, or ``"combined"``.
+    ``"arm64"``, or ``"combined"``. *tag* is the image's full tag; for
+    ``"combined"``, *arch_tags* are the per-arch images' tags (its bases).
 
     Images are skipped if they already exist in the registry
     (unless *force* is ``True``).  For per-arch targets this prevents
     overwriting images that the combined image depends on.
     """
     arches = list(_ARCHES) if target == "combined" else [target]
-    tag_suffix = "" if target == "combined" else f"-{target}"
-    full_tag = f"{tag}{tag_suffix}"
-    final_ref = _image_ref(registry, repository, artifact_name, full_tag)
+    final_ref = _image_ref(registry, repository, artifact_name, tag)
+    if target == "combined" and arch_tags is None:
+        raise ValueError("combined publish needs the per-arch images' tags")
 
     # For per-arch targets, skip if the image already exists.
     if target != "combined" and not force and skopeo.image_exists(final_ref):
@@ -289,6 +291,7 @@ def publish(
                 repository=repository,
                 artifact_name=artifact_name,
                 tag=tag,
+                arch_tags=arch_tags or {},
                 created=created,
                 force=force,
             )
@@ -328,7 +331,7 @@ def publish(
 
 def create_oci_metadata(
     *,
-    flavor: BaseFlavor,
+    flavor: Flavor,
     image_type: str,
     arch: str | None = None,
     repository: str,

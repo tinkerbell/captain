@@ -14,7 +14,7 @@ import logging
 
 import click
 
-from captain import armbian, kernel
+from captain import armbian, versions
 from captain.cli._main import cli
 
 log = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 )
 def prepare_versions_cmd() -> None:
     """Resolve dynamic version tokens and print them to stdout."""
-    kernel_version = kernel.latest_branch_version()
+    kernel_version = versions.latest_branch_version()
     armbian_version = armbian.release_etag()
 
     click.echo(f"kernel_version={kernel_version}")

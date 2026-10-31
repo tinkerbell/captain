@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 from captain import skopeo
+from captain.cache._registry import Registry
 
 from ._common import _image_ref
 
@@ -49,10 +50,13 @@ def tag_image(
     src_tag: str,
     new_tag: str,
 ) -> None:
-    """Tag an existing OCI artifact image with a new version."""
+    """Tag an existing OCI artifact image with a new version.
+
+    Both tags live in the same repository, so this is a manifest re-tag (what
+    ``skopeo copy --all`` amounted to): no blobs move.
+    """
     src_ref = _image_ref(registry, repository, artifact_name, src_tag)
-    dest_ref = _image_ref(registry, repository, artifact_name, new_tag)
-    skopeo.copy(src_ref, dest_ref)
+    Registry(registry).retag(f"{repository}/{artifact_name}", src_tag, new_tag)
     log.info("Tagged %s → %s", src_ref, new_tag)
 
 
@@ -65,24 +69,29 @@ def tag_all(
     new_tag: str,
     arches: list[str],
 ) -> None:
-    """Tag all artifact images (per-arch + combined) with a new version."""
+    """Tag all artifact images (per-arch + combined) with a new version.
+
+    Per-arch images get ``<new_tag>-<arch>``, like their source tags, so
+    ``pull --target <arch>`` works the same with either. Single-arch flavors'
+    images also get the bare ``<new_tag>``, their published name.
+    """
     all_tags = []
     for a in arches:
         arch_orig_tag = f"{src_tag}-{a}"
-        arch_new_tag = f"{new_tag}-{a}"
-
+        arch_new_tags = [f"{new_tag}-{a}"]
         if len(arches) == 1:
-            arch_new_tag = new_tag
+            arch_new_tags.insert(0, new_tag)
 
-        log.info("Tagging for arch %s → %s", arch_orig_tag, arch_new_tag)
-        tag_image(
-            registry=registry,
-            repository=repository,
-            artifact_name=artifact_name,
-            src_tag=arch_orig_tag,
-            new_tag=arch_new_tag,
-        )
-        all_tags.append((arch_orig_tag, arch_new_tag))
+        for arch_new_tag in arch_new_tags:
+            log.info("Tagging for arch %s → %s", arch_orig_tag, arch_new_tag)
+            tag_image(
+                registry=registry,
+                repository=repository,
+                artifact_name=artifact_name,
+                src_tag=arch_orig_tag,
+                new_tag=arch_new_tag,
+            )
+            all_tags.append((arch_orig_tag, arch_new_tag))
 
     # if both arm64 and amd64 arches, also tag the combined image.
     if set(arches) >= {"amd64", "arm64"}:

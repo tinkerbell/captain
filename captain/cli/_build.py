@@ -7,13 +7,12 @@ import logging
 import click
 
 import captain.flavor
-from captain import artifacts
+from captain import artifacts, cache
 from captain.cli._main import CliContext, cli
 from captain.cli.stages import (
     _build_iso_stage,
     _build_mkosi_stage,
     _build_tools_stage,
-    _prune_stale_output_dirs,
 )
 
 log = logging.getLogger(__name__)
@@ -112,35 +111,43 @@ def build_cmd(
     # Instantiate and generate the flavor.
     flavor = captain.flavor.create_and_setup_flavor_for_id(cfg.flavor_id, cfg)
     flavor.generate()
+    cache.announce(cfg)
 
-    # Tools stage.
-    _build_tools_stage(cfg)
+    if cfg.mkosi_mode == "skip":
+        log.info("MKOSI_MODE=skip — skipping image assembly")
+        _build_tools_stage(cfg)
+        return
 
-    # Delegate to flavor, for eg obtaining it's own dependencies.
-    flavor.pre_mkosi_stage()
+    # A cached mkosi output (initramfs or disk image) makes tools and kernel unnecessary.
+    mkosi_key = cache.mkosi_key(cfg, flavor)
+    if cache.restore(cfg, mkosi_key, cfg.initramfs_output, force=force_mkosi):
+        log.info("mkosi output restored; skipping tools, kernel and mkosi stages.")
+    else:
+        cache.require_build(cfg, mkosi_key)
 
-    # Initramfs (mkosi) stage + artifact collection.
-    _build_mkosi_stage(cfg, list(cfg.mkosi_args))
-    artifacts.collect_initramfs(cfg)
-    artifacts.collect_kernel(cfg)
-    artifacts.collect_dtbs(cfg)
-    log.info("Initramfs build complete.")
+        # Tools stage.
+        _build_tools_stage(cfg)
+
+        # Delegate to flavor, for eg obtaining it's own dependencies.
+        flavor.pre_mkosi_stage()
+
+        # mkosi stage (initramfs or disk image, per the flavor's output).
+        _build_mkosi_stage(cfg, list(cfg.mkosi_args))
+        cache.save(cfg, mkosi_key, cfg.initramfs_output)
+
+    flavor.output.collect_artifacts(flavor)
+    log.info("mkosi build complete.")
 
     flavor.post_mkosi_stage()
 
     # ISO stage (if the flavor supports it).
     if flavor.has_iso():
-        _build_iso_stage(cfg)
+        _build_iso_stage(cfg, flavor)
+        artifacts.collect_iso(cfg)
     else:
         log.info("Flavor '%s' does not produce an ISO — skipping.", flavor.id)
 
-    # Final artifact collection.
-    artifacts.collect(cfg)
-
     # Flavor-driven artifact collection.
     flavor.post_artifact_collect()
-
-    # Keep caches/artifacts lean when asked (CI).
-    _prune_stale_output_dirs(cfg)
 
     log.info("Build complete!")

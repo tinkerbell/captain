@@ -1,0 +1,20 @@
+#!/bin/bash
+# Display the CaptainOS boot banner
+
+PRETTY_NAME=$(. /etc/os-release && echo "$PRETTY_NAME")
+KERNEL=$(uname -r)
+HOSTNAME=$(hostname)
+
+# Get primary IP if available
+IP=$(ip -4 addr show scope global 2>/dev/null | grep -oP 'inet \K[0-9.]+' | head -1)
+
+echo ""
+echo "==========================================="
+echo "  CaptainOS - {{ flavor.role.title }}"
+echo "  ${PRETTY_NAME:-CaptainOS}"
+echo "  Flavor: {{ flavor.id }} ({{ flavor.output.label }})"
+echo "  Kernel: ${KERNEL}"
+echo "  Hostname: ${HOSTNAME}"
+[[ -n "$IP" ]] && echo "  IP: ${IP}"
+echo "==========================================="
+echo ""

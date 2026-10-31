@@ -1,0 +1,3 @@
+{% if flavor.distro.family == "deb" -%}
+deb [signed-by=/usr/share/keyrings/kubernetes.asc] https://pkgs.k8s.io/core:/stable:/v{{ cfg.kubernetes_version }}/deb/ /
+{% endif -%}

@@ -1,0 +1,12 @@
+# CaptainOS preset: Kubernetes node
+# kubelet crash-loops until kubeadm init/join writes its config; that is expected.
+enable kubelet.service
+
+# cloud-init (unit names vary across cloud-init versions; unknown ones are ignored)
+enable cloud-init-main.service
+enable cloud-init-local.service
+enable cloud-init-network.service
+enable cloud-init.service
+enable cloud-config.service
+enable cloud-final.service
+enable cloud-init.target

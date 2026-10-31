@@ -1,0 +1,13 @@
+[Output]
+Format=disk
+# Otherwise repart may pick 4K, formatting an ESP that firmware won't read on 512-byte-sector disks.
+SectorSize=512
+CompressOutput=zstd
+CompressLevel=19
+
+[Content]
+# The bootloader is set up by our own postinst (distro initrd + systemd-boot/extlinux)
+Bootable=no
+# Root autologin on the consoles (tty1, serial: see serial-getty@.service.d), like the in-memory output.
+# Root's password stays locked: ssh and plain login prompts still need cloud-init's users.
+Autologin=yes

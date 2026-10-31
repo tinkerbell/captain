@@ -1,0 +1,10 @@
+{% if flavor.platform.boot_scheme in ("uefi", "rpi") -%}
+[Partition]
+# rpi: the Pi 4/5 EEPROM boots from a FAT partition on GPT (firmware, kernel8.img, config.txt...)
+Type=esp
+Label={{ "boot" if flavor.platform.boot_scheme == "rpi" else "esp" }}
+Format=vfat
+CopyFiles=/efi:/
+SizeMinBytes=256M
+SizeMaxBytes=256M
+{% endif -%}

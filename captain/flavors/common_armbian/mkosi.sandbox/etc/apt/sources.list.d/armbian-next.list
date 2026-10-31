@@ -1,2 +1,0 @@
-deb [signed-by=/usr/share/keyrings/armbian-next.gpg] https://apt-test.next.armbian.com armbian main
-deb [signed-by=/usr/share/keyrings/armbian-next.gpg] https://apt-test.next.armbian.com armbian-trixie main

@@ -1,0 +1,26 @@
+# CaptainOS containerd configuration for Kubernetes nodes (containerd 2.x)
+
+version = 3
+root = '/var/lib/containerd'
+state = '/run/containerd'
+
+[grpc]
+  address = '/run/containerd/containerd.sock'
+
+# Registry host configuration directory (mirrors, insecure registries)
+[plugins.'io.containerd.cri.v1.images'.registry]
+  config_path = '/etc/containerd/certs.d'
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd]
+  default_runtime_name = 'runc'
+
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc]
+  runtime_type = 'io.containerd.runc.v2'
+
+# kubelet (via kubeadm) defaults to the systemd cgroup driver
+[plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.runc.options]
+  SystemdCgroup = true
+
+[plugins.'io.containerd.cri.v1.runtime'.cni]
+  bin_dirs = ['/opt/cni/bin']
+  conf_dir = '/etc/cni/net.d'

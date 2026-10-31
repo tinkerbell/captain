@@ -1,0 +1,47 @@
+#!/bin/sh
+# CaptainOS early init: transition rootfs → tmpfs before starting systemd.
+#
+# The Linux kernel extracts the initramfs into "rootfs", a special in-memory
+# filesystem. The pivot_root(2) syscall — required by container runtimes
+# (runc) to jail processes — explicitly rejects rootfs as the old root.
+#
+# This script runs as PID 1 before systemd. It:
+#   1. Mounts a tmpfs at /mnt
+#   2. Copies all rootfs content into it
+#   3. Uses switch_root(8) to pivot to the tmpfs and exec systemd
+#
+# After switch_root, / is a real tmpfs mount and pivot_root works normally.
+# This is the same pattern used by every Linux initramfs (including the
+# LinuxKit-based Hook) to transition from initrd to a real root.
+
+# The kernel starts init without PATH, and shells' built-in defaults differ
+# (Debian's dash includes sbin, Rocky's bash does not).
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+# Mount essential virtual filesystems for switch_root
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+
+# Mount a tmpfs that can use up to 90% of physical RAM.
+mount -t tmpfs -o size=90% tmpfs /mnt
+
+# Copy rootfs content into the tmpfs.
+# -a  archive mode (recursive, preserve permissions/ownership/timestamps)
+# -x  stay on one filesystem (don't cross into /mnt, /proc, /sys, /dev)
+cp -ax / /mnt/
+
+# Ensure mount points exist in the new root
+mkdir -p /mnt/proc /mnt/sys /mnt/dev /mnt/run /mnt/mnt
+
+# Move the virtual filesystem mounts into the new root
+mount --move /proc /mnt/proc
+mount --move /sys /mnt/sys
+mount --move /dev /mnt/dev
+
+# Remove this init script from the new root so systemd is the real init.
+rm -f /mnt/init
+
+# Hand off to systemd on the new tmpfs root.
+# switch_root moves /mnt to /, cleans up the old rootfs, and execs systemd.
+exec switch_root /mnt /lib/systemd/systemd

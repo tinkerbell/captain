@@ -1,0 +1,15 @@
+#!/bin/bash
+# Debian-family post-install: runs outside the image chroot; use 'mkosi-chroot'.
+set -euo pipefail
+
+# Ensure CA certificate bundle is generated.
+log info "Generating fresh CA certificate bundle..."
+mkosi-chroot update-ca-certificates --fresh
+{%- if flavor.keep_package_manager() %}
+
+# base-files ships these as plain files (not conffiles): divert them, so upgrading it (eg. Armbian's,
+# which brands them) doesn't undo ours. os-release is written by core's finalize, after this.
+for diverted in /etc/os-release /etc/issue /etc/issue.net; do
+	mkosi-chroot dpkg-divert --local --no-rename --divert "${diverted}.distro" --add "${diverted}"
+done
+{%- endif %}

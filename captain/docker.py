@@ -1,8 +1,11 @@
-"""Docker builder image management and container execution."""
+"""Running captain and mkosi inside the Docker builder container.
+
+The builder image itself is managed by :mod:`captain.builder`. This module's
+hash is part of the mkosi build-cache key, so keep unrelated code out of it.
+"""
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import platform
@@ -14,135 +17,9 @@ from rich.table import Table
 import captain
 from captain.config import Config
 from captain.kernel import KERNEL_BUILD_BASE_PATH
-from captain.util import detect_current_machine_arch, run
+from captain.util import run
 
 log = logging.getLogger(__name__)
-
-
-def _image_exists(image: str) -> bool:
-    """Check if a Docker image exists locally."""
-    result = run(
-        ["docker", "image", "inspect", image],
-        check=False,
-        capture=True,
-    )
-    return result.returncode == 0
-
-
-def _dockerfile_hash(cfg: Config) -> str:
-    """Return the SHA-256 hex digest of the Dockerfile content.
-
-    This is used as an image tag so that Dockerfile changes are detected
-    automatically.
-    """
-    dockerfile = cfg.project_dir / "Dockerfile"
-    local_arch = detect_current_machine_arch()
-    hex_digest = hashlib.sha256(dockerfile.read_bytes()).hexdigest()
-    return f"{local_arch}-{hex_digest}"
-
-
-def obtain_builder(cfg: Config) -> None:
-    """Build the Docker builder image when the Dockerfile has changed.
-
-    The image is tagged with a content hash of the Dockerfile so that
-    changes are detected even when the base image name stays the same.
-    """
-    tag = _dockerfile_hash(cfg)
-    remote_tagged_image = f"{cfg.builder_registry}/{cfg.builder_repository}/builder:{tag}"
-    local_tagged_image = f"{cfg.builder_image}:{tag}"
-
-    log.debug(
-        "Checking for existing builder image with tag '%s' or remote image '%s'",
-        local_tagged_image,
-        remote_tagged_image,
-    )
-
-    if _image_exists(local_tagged_image):
-        log.info("Docker image '%s' is up to date with %s.", cfg.builder_image, local_tagged_image)
-        # Ensure the un-hashed tag exists so later docker-run calls that
-        # reference cfg.builder_image (without the hash suffix) succeed.
-        run(["docker", "tag", local_tagged_image, cfg.builder_image], check=False)
-        return
-
-    # Check if the remote name exists locally... (was pre-pulled somehow)
-    if _image_exists(remote_tagged_image):
-        log.info(
-            "Docker image '%s' already exists locally (pre-pulled). Tagging as '%s'.",
-            remote_tagged_image,
-            cfg.builder_image,
-        )
-        run(["docker", "tag", remote_tagged_image, cfg.builder_image], check=False)
-        return
-
-    # Check if we can pull the remote image (exists in registry and matches our Dockerfile hash)
-    if (
-        run(
-            ["docker", "pull", remote_tagged_image],
-            check=False,
-            capture=False,
-        ).returncode
-        == 0
-    ):
-        log.info(
-            "Pulled Docker image '%s' from registry. Tagging as '%s'.",
-            remote_tagged_image,
-            cfg.builder_image,
-        )
-        run(["docker", "tag", remote_tagged_image, cfg.builder_image], check=False)
-        return
-
-    # build locally if no existing image was found.
-    log.info("Building Docker image '%s'...", cfg.builder_image)
-    run(
-        [
-            "docker",
-            "buildx",
-            "build",
-            "--load",  # for older Docker versions
-            "--progress=plain",
-            "-t",
-            local_tagged_image,
-            "-t",
-            cfg.builder_image,
-            str(cfg.project_dir),
-        ]
-    )
-
-    # Show the layer size distribution for the built image to help with debugging and optimization.
-    log.info("Docker image '%s' built successfully. Layer size distribution:", local_tagged_image)
-    layer_sizes_lines = run(
-        [
-            "docker",
-            "history",
-            "--no-trunc",
-            "--format",
-            "-> {{.Size}} :: '{{.CreatedBy}}'",
-            local_tagged_image,
-        ],
-        capture=True,
-        check=True,
-    )
-    layers = []
-    for line in layer_sizes_lines.stdout.strip().splitlines():
-        line = line.strip()
-        if line.startswith("-> "):
-            # remove double whitespace chars to make it easier to read
-            line = " ".join(line.split())
-            layers.append(line)
-    # reverse the array to match the order
-    layers.reverse()
-    for layer in layers:
-        log.info("Layer info: %s", layer)
-
-    # Optionally push the image after building it
-    if cfg.builder_push:
-        log.info(
-            "Pushing Docker image '%s' to registry as '%s'...",
-            cfg.builder_image,
-            remote_tagged_image,
-        )
-        run(["docker", "tag", local_tagged_image, remote_tagged_image], check=False)
-        run(["docker", "push", remote_tagged_image])
 
 
 def run_in_builder(
@@ -158,6 +35,9 @@ def run_in_builder(
         "ARCH": cfg.arch,
         "FLAVOR_ID": cfg.flavor_id,
         "KERNEL_VERSION": cfg.kernel_version,
+        # folded into flavor hashes; must match for in-container stages (iso, release)
+        "ARMBIAN_VERSION": cfg.armbian_version or "",
+        "KUBERNETES_VERSION": cfg.kubernetes_version,
         "FORCE_TOOLS": str(int(cfg.force_tools)),
         "FORCE_ISO": str(int(cfg.force_iso)),
         "FORCE_KERNEL": f"{int(cfg.force_kernel)!s}",
@@ -239,17 +119,15 @@ def run_in_builder(
     docker_args += ["-v", f"{cfg.project_dir}/mkosi.input:/work/mkosi.input"]
     docker_args += ["-v", f"{cfg.project_dir}/out:/work/out"]
 
-    docker_args += ["-v", f"{cfg.project_dir}/mkosi.extra:/work/mkosi.extra"]
-    docker_args += ["-v", f"{cfg.project_dir}/mkosi.sandbox:/work/mkosi.sandbox"]
-    docker_args += ["-v", f"{cfg.project_dir}/mkosi.skeleton:/work/mkosi.skeleton"]
-
-    docker_args += ["-v", f"{cfg.project_dir}/mkosi.conf:/work/mkosi.conf"]
-    docker_args += ["-v", f"{cfg.project_dir}/mkosi.finalize:/work/mkosi.finalize"]
-    docker_args += ["-v", f"{cfg.project_dir}/mkosi.postinst:/work/mkosi.postinst"]
+    # The flavor's generated mkosi tree; create it first so Docker doesn't (as root).
+    cfg.generated_dir.mkdir(parents=True, exist_ok=True)
+    docker_args += ["-v", f"{cfg.generated_dir}:/work/mkosi.generated"]
 
     docker_args += ["-v", f"{cfg.project_dir}/captain:/work/captain"]
     docker_args += ["-v", f"{cfg.project_dir}/pyproject.toml:/work/pyproject.toml"]
     docker_args += ["-v", f"{cfg.project_dir}/build.py:/work/build.py"]
+    # Build-cache keys hash the Dockerfile (toolchain); not part of the image itself.
+    docker_args += ["-v", f"{cfg.project_dir}/Dockerfile:/work/Dockerfile:ro"]
 
     docker_args += ["--mount", "type=volume,source=captain-cache-packages,target=/cache/packages"]
     docker_args += [

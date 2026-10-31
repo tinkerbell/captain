@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,7 +12,14 @@ from typing import Any
 import click
 from trogon import tui
 
-from captain.config import DEFAULT_FLAVOR_ID, DEFAULT_KERNEL_VERSION, Config
+from captain import versions
+from captain.config import (
+    DEFAULT_FLAVOR_ID,
+    DEFAULT_KERNEL_VERSION,
+    DEFAULT_KUBERNETES_VERSION,
+    VALID_CACHE_MODES,
+    Config,
+)
 from captain.flavor import list_available_flavors
 from captain.util import detect_current_machine_arch
 
@@ -34,12 +42,34 @@ class CliContext:
     builder_repository: str | None
     builder_image: str
     verbose_docker: bool
-    drop_old_caches: bool
-    kernel_version: str
-    armbian_version: str | None
+    cache_mode: str
+    cache_push: bool
+    cache_only: bool
+    kernel_version: str | None  # None: resolve (see _resolve_versions)
+    armbian_version: str | None  # None: resolve; "" means no cache-bust
+    kubernetes_version: str
+
+    def _resolve_versions(self) -> None:
+        """Resolve unset version tokens like CI's prepare job does, so local cache keys match.
+
+        Only on a local host: in CI the prepare job passes them explicitly, and the
+        Docker-relaunched process gets the host's (Click reads an empty env var as
+        unset, so there None means "").
+        """
+        local = (
+            not os.environ.get("CAPTAIN_IN_DOCKER") and os.environ.get("GITHUB_ACTIONS") != "true"
+        )
+        if self.kernel_version is None:
+            self.kernel_version = (
+                versions.kernel_version(self.project_dir) if local else DEFAULT_KERNEL_VERSION
+            )
+        if self.armbian_version is None:
+            self.armbian_version = versions.armbian_version(self.project_dir) if local else ""
 
     def make_config(self, **overrides: Any) -> Config:
         """Build a :class:`Config` from the common options plus per-command *overrides*."""
+        self._resolve_versions()
+        assert self.kernel_version is not None
         return Config(
             project_dir=self.project_dir,
             output_dir=self.project_dir / "out",
@@ -49,9 +79,12 @@ class CliContext:
             builder_repository=self.builder_repository,
             builder_image=self.builder_image,
             verbose_docker=self.verbose_docker,
-            drop_old_caches=self.drop_old_caches,
+            cache_mode=self.cache_mode,
+            cache_push=self.cache_push,
+            cache_only=self.cache_only,
             kernel_version=self.kernel_version,
             armbian_version=self.armbian_version,
+            kubernetes_version=self.kubernetes_version,
             **overrides,
         )
 
@@ -117,6 +150,8 @@ CONTEXT_SETTINGS = dict(
 )
 @click.option(
     "--flavor-id",
+    "--flavor",
+    "flavor_id",
     envvar="FLAVOR_ID",
     default=DEFAULT_FLAVOR_ID,
     show_default=True,
@@ -152,21 +187,40 @@ CONTEXT_SETTINGS = dict(
     help="Local name/tag of Docker builder image name",
 )
 @click.option(
-    "--drop-old-caches",
-    envvar="CAPTAIN_DROP_OLD_CACHES",
+    "--cache",
+    "cache_mode",
+    envvar="CAPTAIN_CACHE",
+    default="on",
+    show_default=True,
+    type=click.Choice(VALID_CACHE_MODES, case_sensitive=False),
+    help=(
+        "Remote build cache: 'on' (read; push where allowed), 'read' (never push), "
+        "'off' (env: CAPTAIN_CACHE). See docs/build-caching.md."
+    ),
+)
+@click.option(
+    "--cache-push",
+    envvar="CAPTAIN_CACHE_PUSH",
     is_flag=True,
     default=False,
-    help=(
-        "After a build, remove sibling flavor-hash output dirs so caches/artifacts "
-        "only keep the freshly-built version (env: CAPTAIN_DROP_OLD_CACHES)."
-    ),
+    help="Local builds: push what was built to the downstream cache (env: CAPTAIN_CACHE_PUSH).",
+)
+@click.option(
+    "--cache-only",
+    envvar="CAPTAIN_CACHE_ONLY",
+    is_flag=True,
+    default=False,
+    help="Fail instead of building anything that is not cached (env: CAPTAIN_CACHE_ONLY).",
 )
 @click.option(
     "--kernel-version",
     envvar="KERNEL_VERSION",
-    default=DEFAULT_KERNEL_VERSION,
-    show_default=True,
-    help="Kernel version to build/reference. Must match an official tarball (env: KERNEL_VERSION).",
+    default=None,
+    help=(
+        "Kernel version to build/reference. Must match an official tarball (env: KERNEL_VERSION). "
+        "Default: the latest kernel.org release of the branch, cached 6h "
+        f"(else {DEFAULT_KERNEL_VERSION})."
+    ),
 )
 @click.option(
     "--armbian-version",
@@ -174,8 +228,16 @@ CONTEXT_SETTINGS = dict(
     default=None,
     help=(
         "Armbian repo version token folded into armbian flavors' hash so they rebuild "
-        "when armbian-next updates (env: ARMBIAN_VERSION). Empty = no cache-bust."
+        "when armbian-next updates (env: ARMBIAN_VERSION). Default: resolved from the "
+        "armbian-next repo, cached 6h."
     ),
+)
+@click.option(
+    "--kubernetes-version",
+    envvar="KUBERNETES_VERSION",
+    default=DEFAULT_KUBERNETES_VERSION,
+    show_default=True,
+    help="Kubernetes minor version (pkgs.k8s.io) for k8s-role flavors (env: KUBERNETES_VERSION).",
 )
 @click.pass_context
 def cli(
@@ -188,9 +250,12 @@ def cli(
     builder_registry: str | None,
     builder_repository: str | None,
     builder_image: str,
-    drop_old_caches: bool,
-    kernel_version: str,
+    cache_mode: str,
+    cache_push: bool,
+    cache_only: bool,
+    kernel_version: str | None,
     armbian_version: str | None,
+    kubernetes_version: str,
 ) -> None:
     """CaptainOS build system — click CLI."""
     # Configure log level based on --verbose.
@@ -214,9 +279,12 @@ def cli(
         builder_repository=builder_repository,
         builder_image=builder_image,
         verbose_docker=verbose,
-        drop_old_caches=drop_old_caches,
+        cache_mode=cache_mode.lower(),
+        cache_push=cache_push,
+        cache_only=cache_only,
         kernel_version=kernel_version,
         armbian_version=armbian_version,
+        kubernetes_version=kubernetes_version,
     )
 
 
@@ -231,6 +299,8 @@ def main() -> None:
     from captain.cli import (  # noqa: F401
         _build,
         _builder,
+        _cache,
+        _flavors,
         _iso,
         _kernel,
         _prepare,

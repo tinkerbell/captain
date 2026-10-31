@@ -1,6 +1,6 @@
 """Thin wrapper around the ``skopeo`` CLI for OCI image read operations.
 
-Provides digest inspection, image copying (retagging), and downloading
+Provides digest inspection and downloading
 images to a local directory for artifact extraction.  All operations
 are rootless and require no container runtime.
 """
@@ -43,31 +43,6 @@ def inspect_digest(image_ref: str) -> str:
         capture=True,
     )
     return result.stdout.strip()
-
-
-def copy(src: str, dest: str) -> None:
-    """Copy an image from *src* to *dest*.
-
-    *src* and *dest* are plain image references (e.g.
-    ``ghcr.io/org/repo:tag``); the ``docker://`` transport prefix is
-    added automatically.  Typically used for retagging: the source and
-    destination differ only in the tag component.
-    """
-    log.info("skopeo copy %s → %s", src, dest)
-    run(
-        [
-            "skopeo",
-            "copy",
-            *(
-                ["--src-tls-verify=false", "--dest-tls-verify=false"]
-                if os.environ.get("REGISTRY_INSECURE") == "1"
-                else []
-            ),
-            "--all",
-            f"docker://{src}",
-            f"docker://{dest}",
-        ]
-    )
 
 
 def copy_to_dir(

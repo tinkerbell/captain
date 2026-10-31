@@ -1,0 +1,65 @@
+#!/bin/bash
+# mkosi.finalize — Runs after the image is assembled but before output.
+# The root filesystem is writable here.
+set -euo pipefail
+
+# Remove systemd-firstboot completely
+log info "Completely remove systemd-firstboot..."
+rm -fv "$BUILDROOT/usr/lib/systemd/system/systemd-firstboot.service"
+rm -fv "$BUILDROOT/usr/lib/systemd/system/sysinit.target.wants/systemd-firstboot.service"
+rm -fv "$BUILDROOT/usr/bin/systemd-firstboot"
+
+# Point /etc/resolv.conf at the non-stub resolv.conf written by
+# systemd-resolved.  This file contains upstream (DHCP-provided)
+# nameservers instead of 127.0.0.53.  tink-agent bind-mounts the host's
+# /etc/resolv.conf into action containers so they need real, routable
+# nameservers (the stub address is unreachable from container namespaces).
+log info "Handle resolv.conf..."
+ln -sfv /run/systemd/resolve/resolv.conf "$BUILDROOT/etc/resolv.conf"
+
+# Ensure tool binaries are executable.
+# GitHub Actions artifact upload/download and some archive tools strip
+# the execute bit.  Re-apply +x to every tool directory so containerd,
+# runc, nerdctl, and CNI plugins can actually run.
+log info "Ensure tool binaries are executable..."
+for dir in usr/local/bin opt/cni/bin; do
+    target="$BUILDROOT/$dir"
+    if [[ -d "$target" ]]; then
+        find "$target" -type f -exec chmod -v +x {} +
+    fi
+done
+
+# Keep the kernel config where kubeadm's preflight (among others) finds it, also when /boot doesn't
+# survive: the mem output deletes it, and disk images with an ESP don't carry it in the root partition.
+for kconfig in "${BUILDROOT}"/boot/config-*; do
+	[[ -f "${kconfig}" ]] || continue
+	kver="${kconfig##*/config-}"
+	if [[ -d "${BUILDROOT}/usr/lib/modules/${kver}" && ! -f "${BUILDROOT}/usr/lib/modules/${kver}/config" ]]; then
+		log info "Keeping kernel config for ${kver} as /usr/lib/modules/${kver}/config"
+		cp -v "${kconfig}" "${BUILDROOT}/usr/lib/modules/${kver}/config"
+	fi
+done
+
+# Our own /etc/os-release, on top of the distro's: ID, VERSION_ID etc. stay, so cloud-init, dnf, ansible...
+# still see the real distro; NAME/PRETTY_NAME/VARIANT/IMAGE_ID say what this actually is.
+# BUILD_ID is written here, not rendered, so it doesn't change the flavor hash.
+log info "Writing CaptainOS /etc/os-release..."
+distro_os_release="${BUILDROOT}/usr/lib/os-release"
+[[ -f "${distro_os_release}" ]] || distro_os_release="${BUILDROOT}/etc/os-release"
+distro_pretty_name="$(. "${distro_os_release}" && echo "${PRETTY_NAME:-${NAME:-Linux}}")"
+distro_fields="$(grep -vE '^(NAME|PRETTY_NAME|VARIANT|VARIANT_ID|IMAGE_ID|IMAGE_VERSION|BUILD_ID|HOME_URL|SUPPORT_URL|BUG_REPORT_URL|DOCUMENTATION_URL|PRIVACY_POLICY_URL|LOGO)=' "${distro_os_release}")"
+rm -fv "${BUILDROOT}/etc/os-release"
+cat > "${BUILDROOT}/etc/os-release" <<-OS_RELEASE
+	NAME="CaptainOS"
+	PRETTY_NAME="CaptainOS {{ flavor.role.title }}, {{ flavor.output.label }} (${distro_pretty_name})"
+	${distro_fields}
+	VARIANT="{{ flavor.role.title }}"
+	VARIANT_ID={{ flavor.role.name }}
+	IMAGE_ID={{ flavor.id }}
+	BUILD_ID=$(date -u +%Y%m%dT%H%M%SZ)
+	CAPTAINOS_OUTPUT={{ flavor.output.output_kind }}
+	CAPTAINOS_PLATFORM={{ flavor.platform.name }}
+	HOME_URL="https://tinkerbell.org"
+	BUG_REPORT_URL="https://github.com/tinkerbell/captain/issues"
+OS_RELEASE
+cat "${BUILDROOT}/etc/os-release"
