@@ -23,27 +23,32 @@ ARMBIAN_NEXT_RELEASE_URL = "https://apt-test.next.armbian.com/dists/armbian/Rele
 _FETCH_TIMEOUT = 30  # seconds
 
 
-def release_etag(url: str = ARMBIAN_NEXT_RELEASE_URL) -> str:
+def fetch_release_etag(url: str = ARMBIAN_NEXT_RELEASE_URL, timeout: float = _FETCH_TIMEOUT) -> str:
     """Return a short, stable cache-bust token from *url*'s ETag response header.
 
-    Returns ``""`` on any failure or when the server sends no ETag — an empty
-    token means "no cache-bust", preserving current behaviour.
+    Raises ``ValueError`` (or a network error) when there is no usable ETag.
     """
-    try:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT) as resp:
-            etag = resp.headers.get("ETag", "")
-    except (urllib.error.URLError, OSError) as exc:
-        log.warning("Could not fetch ETag from %s (%s); no armbian cache-bust", url, exc)
-        return ""
+    req = urllib.request.Request(url, method="HEAD")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        etag = resp.headers.get("ETag", "")
 
     # Normalise weak-validator prefix and surrounding quotes, then hash to a
     # fixed-width token that is safe to embed in filenames / cache keys.
     etag = etag.strip().removeprefix("W/").strip('"')
     if not etag:
-        log.warning("No ETag header from %s; no armbian cache-bust", url)
-        return ""
+        raise ValueError(f"no ETag header from {url}")
 
     token = hashlib.sha256(etag.encode()).hexdigest()[:16]
     log.info("Armbian repo Release ETag %r → cache-bust token %s", etag, token)
     return token
+
+
+def release_etag(url: str = ARMBIAN_NEXT_RELEASE_URL) -> str:
+    """Like :func:`fetch_release_etag`, but returns ``""`` on any failure — an empty
+    token means "no cache-bust".
+    """
+    try:
+        return fetch_release_etag(url)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        log.warning("Could not fetch ETag from %s (%s); no armbian cache-bust", url, exc)
+        return ""

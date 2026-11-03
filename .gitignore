@@ -8,6 +8,9 @@ mkosi.builddir/
 out/
 
 # Generated artifacts
+/mkosi.generated/
+/mkosi.cache.for.incremental/
+# Legacy (pre mkosi.generated/) locations
 /mkosi.conf
 /mkosi.finalize
 /mkosi.postinst

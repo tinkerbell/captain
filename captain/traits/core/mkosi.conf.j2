@@ -1,0 +1,45 @@
+[Output]
+ManifestFormat=json
+OutputDirectory=mkosi.output
+
+[Build]
+Incremental=yes
+WithNetwork=yes
+# Outside the disposable generated dir, so it survives regeneration.
+# Paths in drop-in directories are relative to the drop-in itself.
+CacheDirectory={{ flavor.project_relative("mkosi.cache.for.incremental") }}
+
+[Content]
+{% if flavor.keep_package_manager() %}
+CleanPackageMetadata=no
+{% else %}
+CleanPackageMetadata=yes
+{% endif %}
+# Skips installing documentation/man pages
+WithDocs=no
+
+RemoveFiles=
+    /usr/share/doc
+    /usr/share/man
+    /usr/share/info
+    /usr/share/locale
+    /usr/share/i18n
+    /usr/share/zoneinfo
+    {% if not flavor.keep_package_manager() %}
+    /var/cache
+    {% endif %}
+    /var/log
+    /usr/share/bash-completion
+    /usr/share/zsh
+    {% if not flavor.keep_hwdb() %}
+    /usr/lib/udev/hwdb.d
+    {% endif %}
+    /usr/share/lintian
+    /usr/share/bug
+    /usr/share/pixmaps
+    /usr/share/applications
+    /usr/share/icons
+    /usr/lib/systemd/catalog
+    /var/lib/systemd/catalog
+    /usr/lib/systemd/system/systemd-firstboot.service
+    /usr/lib/systemd/system/sysinit.target.wants/systemd-firstboot.service

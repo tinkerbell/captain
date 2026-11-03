@@ -1,0 +1,16 @@
+[Output]
+Format=cpio
+CompressOutput=zstd
+CompressLevel=19
+
+[Content]
+Bootable=no
+Autologin=yes
+
+# Do NOT set MakeInitrd=yes — that adds /etc/initrd-release which causes
+# systemd to enter initrd mode and try switch-root to a real rootfs.
+# CaptainOS uses a custom /init script (mkosi.extra/init) that transitions
+# rootfs → tmpfs via switch_root before exec'ing systemd. This makes
+# pivot_root(2) work for container runtimes (runc).
+RemoveFiles=
+    /etc/initrd-release

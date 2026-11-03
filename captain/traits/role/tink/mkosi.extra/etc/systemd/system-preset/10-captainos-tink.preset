@@ -1,0 +1,4 @@
+# CaptainOS preset: Tink-agent and related CaptainOS services
+enable tink-agent.service
+enable tink-agent-setup.service
+

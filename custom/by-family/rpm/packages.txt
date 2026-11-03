@@ -1,0 +1,2 @@
+# Packages only for rpm-family flavors (eg. Rocky), one per line.
+# Debian names are mapped (eg. iproute2 -> iproute); rpm-native names pass through unchanged.

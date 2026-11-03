@@ -14,6 +14,9 @@ log = logging.getLogger(__name__)
 # Valid values for KERNEL_MODE and MKOSI_MODE.
 VALID_MODES = ("docker", "native", "skip")
 
+# Valid values for CAPTAIN_CACHE.
+VALID_CACHE_MODES = ("on", "read", "off")
+
 # The single source of truth for the default flavor.
 # Override at runtime via --flavor-id or FLAVOR_ID env var.
 DEFAULT_FLAVOR_ID = "trixie-full"
@@ -23,6 +26,10 @@ DEFAULT_FLAVOR_ID = "trixie-full"
 # via <@TODO cmd for listing from cached releases.json
 # Override at runtime via --kernel-version or KERNEL_VERSION env var.
 DEFAULT_KERNEL_VERSION = "6.18.39"
+
+# Kubernetes minor version (pkgs.k8s.io repo) for flavors with the k8s role.
+# Override at runtime via --kubernetes-version or KUBERNETES_VERSION env var.
+DEFAULT_KUBERNETES_VERSION = "1.36"
 
 
 @dataclass(slots=True)
@@ -39,6 +46,8 @@ class Config:
     arch: str = "amd64"
     flavor_id: str = DEFAULT_FLAVOR_ID
     flavor_hash: str | None = None  # resolved at runtime
+    # What mkosi produces for the flavor ("initramfs" or "image"); set by the flavor's output trait.
+    output_kind: str = "initramfs"
 
     # For kernel build
     build_kernel: bool = False
@@ -51,6 +60,9 @@ class Config:
     # so they rebuild when armbian-next publishes a newer kernel. Empty/None =
     # no cache-bust (default; stable hash for local builds).
     armbian_version: str | None = None
+
+    # Kubernetes minor version, for flavors with the k8s role
+    kubernetes_version: str = DEFAULT_KUBERNETES_VERSION
 
     # Docker
     builder_registry: str | None = None
@@ -71,9 +83,10 @@ class Config:
     force_iso: bool = False
     force_release: bool = False
 
-    # Prune sibling flavor_hash output dirs after a build, so caches/artifacts
-    # only contain the freshly-built version (opt-in; used in CI).
-    drop_old_caches: bool = False
+    # Build cache (see captain/cache and docs/build-caching.md)
+    cache_mode: str = "on"  # "on" | "read" (never push) | "off" (no remote cache)
+    cache_push: bool = False  # local builds: opt-in push to the downstream cache
+    cache_only: bool = False  # fail on cache misses instead of building
 
     # QEMU
     qemu_mem: str = "2G"
@@ -135,9 +148,9 @@ class Config:
 
     @property
     def initramfs_output(self) -> Path:
-        """Per-version, per-arch directory for mkosi initramfs output."""
+        """Per-version, per-arch directory for mkosi output (initramfs or disk image)."""
         base_dir: Path = self.project_dir
-        return self.calc_initramfs_output(base_dir, "initramfs")
+        return self.calc_initramfs_output(base_dir, self.output_kind)
 
     @property
     def iso_output(self) -> Path:
@@ -161,6 +174,11 @@ class Config:
     def iso_staging(self) -> Path:
         """Per-version, per-arch staging directory for assembling the ISO filesystem."""
         return self.iso_output / "staging"
+
+    @property
+    def generated_dir(self) -> Path:
+        """Disposable directory the flavor renders its mkosi config tree into."""
+        return self.project_dir / "mkosi.generated"
 
     @property
     def custom_dir(self) -> Path:

@@ -1,7 +1,0 @@
-NAME="CaptainOS"
-ID=captainos
-ID_LIKE=debian
-VERSION_ID="0.1.0"
-PRETTY_NAME="CaptainOS 0.1.0 (Tinkerbell)"
-HOME_URL="https://tinkerbell.org"
-BUG_REPORT_URL="https://github.com/tinkerbell/captain/issues"

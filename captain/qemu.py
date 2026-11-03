@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import atexit
+import functools
+import http.server
 import logging
 import shutil
+import socketserver
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 from captain.config import Config
@@ -74,16 +78,7 @@ def run_qemu(cfg: Config, args: list[str] | None = None) -> None:
         case "arm64":
             qemu_arm64_params(cfg, cmdline_compos, per_arch_extra_cmds)
 
-    # If matching the host architecture, enable hardware acceleration via KVM or HVF
-    if cfg.arch == detect_current_machine_arch():
-        # if on Darwin and arm64 (Apple Silicon), enable hvf accel.
-        if sys.platform == "darwin":
-            log.info("Native run on Apple, enabling HVF acceleration")
-            per_arch_extra_cmds += ["-accel", "hvf"]
-
-        if sys.platform == "linux" and Path("/dev/kvm").is_char_device():
-            log.info("Native run on Linux with KVM available, enabling KVM acceleration")
-            per_arch_extra_cmds += ["-accel", "kvm"]
+    per_arch_extra_cmds += _accel_args(cfg)
 
     append = " ".join(cmdline_compos).strip()
     log.info("Kernel cmdline: '%s'", append)
@@ -107,6 +102,89 @@ def run_qemu(cfg: Config, args: list[str] | None = None) -> None:
             "-no-reboot",
         ],
     )
+
+
+def _accel_args(cfg: Config) -> list[str]:
+    """Hardware acceleration via KVM or HVF, when matching the host architecture."""
+    if cfg.arch != detect_current_machine_arch():
+        return []
+    # if on Darwin and arm64 (Apple Silicon), enable hvf accel.
+    if sys.platform == "darwin":
+        log.info("Native run on Apple, enabling HVF acceleration")
+        return ["-accel", "hvf"]
+    if sys.platform == "linux" and Path("/dev/kvm").is_char_device():
+        log.info("Native run on Linux with KVM available, enabling KVM acceleration")
+        return ["-accel", "kvm"]
+    return []
+
+
+def run_qemu_disk(
+    cfg: Config, disk_image: Path, ssh_port: int, ssh_key: Path | None, disk_size: str
+) -> None:
+    """Boot a disk image (UEFI, virtio disk), seeding cloud-init via NoCloud over HTTP.
+
+    The compressed image is decompressed into a scratch copy, grown to *disk_size* (so
+    cloud-init's growpart has room); the original stays untouched. cloud-init finds the
+    NoCloud seed via the SMBIOS serial number (``ds=nocloud;s=http://...``), served from
+    this process; it creates a ``captain`` user with *ssh_key*, reachable on *ssh_port*.
+    """
+    if not disk_image.is_file():
+        log.error("Disk image not found: %s", disk_image)
+        sys.exit(1)
+
+    scratch = cfg.project_dir / "mkosi.output" / "qemu" / disk_image.name.removesuffix(".zst")
+    scratch.parent.mkdir(parents=True, exist_ok=True)
+    log.info("Decompressing %s to %s", disk_image, scratch)
+    run(["zstd", "-d", "-f", "-q", "-o", str(scratch), str(disk_image)])
+    run(["qemu-img", "resize", "-f", "raw", str(scratch), disk_size])
+
+    seed_dir = Path(tempfile.mkdtemp(prefix="captain.qemu.nocloud."))
+    atexit.register(shutil.rmtree, seed_dir, ignore_errors=True)
+    (seed_dir / "meta-data").write_text(f"instance-id: captain-qemu-{cfg.flavor_id}\n")
+    user_data = ["#cloud-config", "users:", "  - name: captain", "    shell: /bin/bash"]
+    user_data += ["    sudo: ALL=(ALL) NOPASSWD:ALL"]
+    if ssh_key is not None:
+        user_data += ["    ssh_authorized_keys:", f"      - {ssh_key.read_text().strip()}"]
+    else:
+        log.warning("No ssh public key found/given; the 'captain' user will have no way in")
+    (seed_dir / "user-data").write_text("\n".join(user_data) + "\n")
+    (seed_dir / "vendor-data").write_text("")
+
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(seed_dir))
+    server = socketserver.TCPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    seed_port = server.server_address[1]
+    log.info("Serving NoCloud seed from %s on port %d", seed_dir, seed_port)
+
+    machine_args: list[str] = []
+    match cfg.arch:
+        case "amd64":
+            qemu_amd64_params(cfg, [], machine_args)
+        case "arm64":
+            qemu_arm64_params(cfg, [], machine_args)
+    machine_args += _accel_args(cfg)
+
+    log.info("Booting %s; ssh -p %d captain@localhost ('Ctrl-A x' to exit)", scratch, ssh_port)
+    run(
+        [
+            cfg.arch_info.qemu_binary,
+            *machine_args,
+            "-drive",
+            f"if=virtio,format=raw,file={scratch}",
+            # 10.0.2.2 is the host, as seen from QEMU's user-mode network
+            "-smbios",
+            f"type=1,serial=ds=nocloud;s=http://10.0.2.2:{seed_port}/",
+            "-nographic",
+            "-m",
+            cfg.qemu_mem,
+            "-smp",
+            cfg.qemu_smp,
+            "-nic",
+            f"user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:{ssh_port}-:22",
+            "-no-reboot",
+        ],
+    )
+    server.shutdown()
 
 
 def qemu_amd64_params(cfg: Config, cmdline_compos: list[str], per_arch_extra_cmds: list[str]):

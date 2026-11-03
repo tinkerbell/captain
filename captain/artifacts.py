@@ -78,6 +78,20 @@ def collect_dtbs(cfg):
         log.warning("No dtb directory found in %s", dtb_dir)
 
 
+def collect_disk_image(cfg: Config) -> None:
+    """Copy the zstd-compressed disk image produced by mkosi to out/."""
+    from captain.traits.output import disk_image_name
+
+    out = ensure_dir(cfg.output_dir)
+    images = sorted(cfg.initramfs_output.glob("*.raw.zst"))
+    if not images:
+        log.error("No disk image produced by mkosi in %s", cfg.initramfs_output)
+        raise SystemExit(1)
+    image_dst = out / disk_image_name(cfg.flavor_id, cfg.arch_info.output_arch)
+    shutil.copy2(images[0], image_dst)
+    log.info("disk image: %s (%s)", image_dst, _human_size(image_dst.stat().st_size))
+
+
 def collect_iso(cfg: Config) -> None:
     """Copy the ISO image from mkosi.output/iso/{arch}/ to out/."""
     out = ensure_dir(cfg.output_dir)
@@ -126,14 +140,6 @@ def collect_checksums(
             "no output checksum file was created.",
             len(files),
         )
-
-
-def collect(cfg: Config) -> None:
-    """Copy initramfs, kernel, and ISO images from mkosi.output/ to out/."""
-    log.info("Collecting build artifacts...")
-    collect_initramfs(cfg)
-    collect_kernel(cfg)
-    collect_iso(cfg)
 
 
 class OutputArchArtifactType(StrEnum):

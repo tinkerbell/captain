@@ -9,10 +9,7 @@ import click
 import captain.flavor
 from captain import artifacts
 from captain.cli._main import CliContext, cli
-from captain.cli.stages import (
-    _build_iso_stage,
-    _prune_stale_output_dirs,
-)
+from captain.cli.stages import _build_iso_stage
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +52,6 @@ def build_cmd(
     flavor = captain.flavor.create_and_setup_flavor_for_id(cfg.flavor_id, cfg)
     flavor.generate(hash_only=True)  # Just populates cfg.flavor_hash so we can find the initramfs
 
-    _build_iso_stage(cfg)
+    _build_iso_stage(cfg, flavor)
     artifacts.collect_iso(cfg)
-    _prune_stale_output_dirs(cfg)
     log.info("ISO build complete!!!")

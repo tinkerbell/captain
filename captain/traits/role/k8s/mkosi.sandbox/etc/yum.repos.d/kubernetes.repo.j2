@@ -1,0 +1,8 @@
+{% if flavor.distro.family == "rpm" -%}
+[kubernetes]
+name=Kubernetes v{{ cfg.kubernetes_version }}
+baseurl=https://pkgs.k8s.io/core:/stable:/v{{ cfg.kubernetes_version }}/rpm/
+enabled=1
+gpgcheck=1
+gpgkey=https://pkgs.k8s.io/core:/stable:/v{{ cfg.kubernetes_version }}/rpm/repodata/repomd.xml.key
+{% endif -%}

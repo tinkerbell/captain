@@ -1,0 +1,25 @@
+# Flavors to build in CI (matrix, release tags and GitHub Releases), one per line: a flavor id or a glob,
+# eg. `*-armbian-rpi` or `img-k8s-capt-*`. Empty (or only comments): build every flavor.
+# A line matching no flavor fails CI. Local builds ignore this file. `uv run captain list-flavors` shows the
+# registry (with a `ci` column when this file selects only some).
+#
+# trixie-full
+# trixie-slim
+# trixie-armbian-rpi
+# trixie-genio
+# trixie-meson64
+# trixie-rockchip64
+# trixie-rockchip64-vendor
+# rockylinux10-full
+# resolute-full
+# resolute-rockchip64
+# img-k8s-capt-trixie-full
+# mem-k8s-capt-trixie-full
+# img-k8s-capt-resolute-full
+# mem-k8s-capt-resolute-full
+# img-k8s-capt-rockylinux10-full
+# mem-k8s-capt-rockylinux10-full
+# img-k8s-capt-trixie-rockchip64
+# mem-k8s-capt-trixie-rockchip64
+# img-k8s-capt-trixie-armbian-rpi
+# mem-k8s-capt-trixie-armbian-rpi

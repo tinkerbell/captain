@@ -1,0 +1,13 @@
+#!/bin/bash
+# mkosi.postinst (mem output) — Runs *outside* the image chroot; use 'mkosi-chroot' to run commands inside it.
+set -euo pipefail
+
+# Not an initrd: mask the units that would try to switch-root to a real rootfs.
+log info "Masking initrd units..."
+mkosi-chroot systemctl mask \
+	initrd-cleanup.service \
+	initrd-parse-etc.service \
+	initrd-switch-root.service \
+	initrd-switch-root.target \
+	initrd-udevadm-cleanup-db.service \
+	initrd.target

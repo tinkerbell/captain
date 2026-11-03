@@ -1,0 +1,9 @@
+#!/bin/bash
+# mkosi.finalize (img output) — Runs after the image is assembled but before output.
+set -euo pipefail
+
+# Every deployed machine must get its own ssh host keys (cloud-init / sshd-keygen generate them on first boot).
+log info "Removing build-time ssh host keys..."
+rm -fv "${BUILDROOT}"/etc/ssh/ssh_host_*
+
+log info "Disk image finalize complete."

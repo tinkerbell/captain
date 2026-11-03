@@ -1,0 +1,5 @@
+{% if flavor.output.output_kind == "image" -%}
+[Content]
+# RPi firmware blobs for the boot partition (repart copies /efi into it; see output/img).
+ExtraTrees={{ flavor.project_relative(flavor.platform.firmware_input_relative()) }}:/efi
+{% endif -%}

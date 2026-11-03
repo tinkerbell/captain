@@ -43,16 +43,28 @@ if [[ ${ENABLE_EXAMPLE_CA_CERTS} -gt 0 ]]; then
 
     log info "Adding custom root CA certificate to image trust store..."
 
+    # Debian-family and RPM-family distros keep local CAs in different places, with different tools.
+    if [[ "${CAPTAIN_DISTRO_FAMILY}" == "rpm" ]]; then
+        ca_dir="${BUILDROOT}/etc/pki/ca-trust/source/anchors"
+    else
+        ca_dir="${BUILDROOT}/usr/local/share/ca-certificates"
+    fi
+    mkdir -pv "${ca_dir}"
+
     curl https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x1.pem \
-        -o "${BUILDROOT}/usr/local/share/ca-certificates/letsencrypt-stg-root-x1.crt"
+        -o "${ca_dir}/letsencrypt-stg-root-x1.crt"
 
     curl https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x2.pem \
-        -o "${BUILDROOT}/usr/local/share/ca-certificates/letsencrypt-stg-root-x2.crt"
+        -o "${ca_dir}/letsencrypt-stg-root-x2.crt"
 
     # update the CA certificate bundle to include the new certs.
     # this is not needed when using .crt files in the custom/files/ directory, since the regular
     # (non-custom) postinst already does this.
-    mkosi-chroot update-ca-certificates --fresh --verbose
+    if [[ "${CAPTAIN_DISTRO_FAMILY}" == "rpm" ]]; then
+        mkosi-chroot update-ca-trust extract
+    else
+        mkosi-chroot update-ca-certificates --fresh --verbose
+    fi
 
     log info "Custom root CA certificate added and CA bundle updated."
 fi
