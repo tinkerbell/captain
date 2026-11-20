@@ -4,6 +4,7 @@ Name=eth*
 
 [Network]
 DHCP=yes
+LinkLocalAddressing=fallback
 
 [DHCPv4]
 UseDNS=yes
